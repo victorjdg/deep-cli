@@ -56,7 +56,7 @@ Long-running operations (API calls, agent loops, streaming) run in goroutines re
 | Operation        | Cmd                      | Msg                                               |
 |------------------|--------------------------|---------------------------------------------------|
 | Stream response  | `startStream()`          | `streamChunkMsg`, `streamDoneMsg`, `streamErrMsg` |
-| Agent loop       | `runAgentLoop()`         | `agentToolUseMsg`, `agentConfirmMsg`, `agentDoneMsg`, `agentErrMsg` |
+| Agent loop       | `runAgentLoop()`         | `agentToolUseMsg`, `agentSpinnerMsg`, `agentTraceMsg`, `agentConfirmMsg`, `agentWarnMsg`, `agentDoneMsg`, `agentErrMsg` |
 | Compact context  | `compactConversation()`  | `compactDoneMsg`                                  |
 | Enhance prompt   | `enhancePrompt()`        | `enhanceDoneMsg`                                  |
 | Fetch models     | `fetchModels()`          | `modelsListMsg`                                   |
@@ -70,8 +70,11 @@ The agent loop uses a channel to emit progress events so the UI can update in re
 ```
 runAgentLoop() ──► goroutine ──► ch agentEvent
                                   │
-                                  ├── agentToolUseMsg   (each tool call)
+                                  ├── agentSpinnerMsg   (thinking / processing results)
+                                  ├── agentToolUseMsg   (each tool call, with spinner label)
+                                  ├── agentTraceMsg     (tool result, recorded in trace panel)
                                   ├── agentConfirmMsg   (write_file / patch_file / run_command)
+                                  ├── agentWarnMsg      (tool disabled after failure)
                                   ├── agentDoneMsg      (final answer)
                                   └── agentErrMsg       (on failure)
 
@@ -108,6 +111,7 @@ Model (tui/model.go)
 ├── completionState     — Autocomplete popup
 ├── modelPicker         — Model selection popup
 ├── confirmPrompt       — Confirmation widget (edits and commands)
+├── tracePanel          — Agent trace popup (Ctrl+T)
 └── promptHistory       — Up/down history navigation
 ```
 

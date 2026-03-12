@@ -46,9 +46,12 @@ type Model struct {
 	pendingFileContent string // file content waiting for enhance to complete
 	pendingMessage     string // original message waiting for enhance to complete
 
-	agentChan     <-chan agentEvent // channel for agent loop progress
-	confirmPrompt confirmPrompt
-	confirmReplyCh chan<- bool // write-only; held while stateConfirm is active
+	agentChan      <-chan agentEvent // channel for agent loop progress
+	confirmPrompt  confirmPrompt
+	confirmReplyCh chan<- bool       // write-only; held while stateConfirm is active
+	searchManager  *search.Manager
+	tracePanel     tracePanel
+	undoStack      []agentUndoEntry
 
 	// Streaming state
 	streamBuf    *strings.Builder
@@ -71,17 +74,18 @@ func newModel(cfg *config.Config) Model {
 	}
 
 	return Model{
-		cfg:       cfg,
-		client:    client,
-		session:   sess,
-		input:     newInputModel(),
-		viewport:  newViewportModel(),
-		statusBar: newStatusBarModel(mode, cfg.Model, !cfg.UseLocal),
-		spinner:   newSpinnerModel(),
-		state:       stateReady,
-		agentActive: !cfg.UseLocal,
-		streamBuf:   &strings.Builder{},
-		history:     newPromptHistory(),
+		cfg:           cfg,
+		client:        client,
+		session:       sess,
+		input:         newInputModel(),
+		viewport:      newViewportModel(),
+		statusBar:     newStatusBarModel(mode, cfg.Model, !cfg.UseLocal),
+		spinner:       newSpinnerModel(),
+		state:         stateReady,
+		agentActive:   !cfg.UseLocal,
+		streamBuf:     &strings.Builder{},
+		history:       newPromptHistory(),
+		searchManager: searchManager,
 	}
 }
 
@@ -155,6 +159,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamChunkMsg:
 		m.streamBuf.WriteString(msg.content)
 		m.viewport.AddStreamingContent(m.streamBuf.String())
+		if msg.done != nil {
+			// Done arrived in the same batch — finalize immediately.
+			content := m.streamBuf.String()
+			m.session.AddAssistant(content)
+			m.session.AddTokens(msg.done.Usage)
+			m.viewport.FinalizeAssistantMessage(content)
+			m.statusBar.SetTokens(m.session.Tokens.TotalTokens)
+			m.statusBar.SetContextPct(m.session.ContextPercentage())
+			if m.session.IsNearLimit(0.9) {
+				m.viewport.AddSlashOutput("⚠ Context window usage above 90%. Consider using /clear to reset the conversation.")
+			}
+			m.streamBuf.Reset()
+			m.streamCancel = nil
+			m.streamChunks = nil
+			m.state = stateReady
+			m.spinner.Stop()
+			m.input.Focus()
+			return m, nil
+		}
 		return m, listenForChunk(m.streamChunks)
 
 	case streamDoneMsg:
@@ -214,13 +237,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(spinnerCmd, startStream(m.client, m.session.Messages, ctx))
 
 	case agentToolUseMsg:
-		m.spinner.Stop()
 		label := fmt.Sprintf("  tool: %s(%s)", msg.name, msg.args)
-		if msg.name == "write_file" {
+		if msg.name == "write_file" || msg.name == "patch_file" {
 			label += "  [write]"
 		}
 		m.viewport.AddSlashOutput(label)
-		spinnerCmd := m.spinner.Start("Agent working...")
+		spinnerLabel := msg.spinnerLabel
+		if spinnerLabel == "" {
+			spinnerLabel = "Agent working..."
+		}
+		spinnerCmd := m.spinner.Start(spinnerLabel)
 		return m, tea.Batch(spinnerCmd, listenForAgentEvent(m.agentChan))
 
 	case agentDoneMsg:
@@ -236,6 +262,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		return m, nil
 
+	case agentSpinnerMsg:
+		spinnerCmd := m.spinner.Start(msg.label)
+		return m, tea.Batch(spinnerCmd, listenForAgentEvent(m.agentChan))
+
+	case agentTraceMsg:
+		m.tracePanel.AddEntry(msg.tool, msg.args, msg.result)
+		return m, listenForAgentEvent(m.agentChan)
+
+	case agentUndoEntry:
+		m.undoStack = append(m.undoStack, msg)
+		return m, listenForAgentEvent(m.agentChan)
+
+	case agentWarnMsg:
+		m.viewport.AddSlashOutput("⚠ " + msg.text)
+		spinnerCmd := m.spinner.Start("Agent working...")
+		return m, tea.Batch(spinnerCmd, listenForAgentEvent(m.agentChan))
+
 	case agentErrMsg:
 		m.spinner.Stop()
 		m.agentChan = nil
@@ -250,7 +293,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case confirmKindCommand:
 			m.confirmPrompt.OpenCommand(msg.title, m.width)
 		case confirmKindEdit:
-			m.confirmPrompt.OpenEdit(msg.title, msg.detail, m.width)
+			m.confirmPrompt.OpenEdit(msg.title, msg.detail, msg.diff, m.width)
 		}
 		m.confirmReplyCh = msg.replyCh
 		m.state = stateConfirm
@@ -318,6 +361,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
+	}
+
+	if m.tracePanel.active {
+		if cmd := m.tracePanel.Update(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	var vpCmd tea.Cmd
@@ -397,6 +446,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.viewport.AddSlashOutput("Auto-accept OFF. You will be asked before each file edit or command.")
 		}
+		return m, nil
+
+	case key == "ctrl+t":
+		m.tracePanel.Toggle(m.width, m.height)
 		return m, nil
 
 	case key == "ctrl+l":
@@ -628,6 +681,29 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if result.undo {
+			if len(m.undoStack) == 0 {
+				m.viewport.AddSlashOutput("Nothing to undo.")
+				return m, nil
+			}
+			entry := m.undoStack[len(m.undoStack)-1]
+			m.undoStack = m.undoStack[:len(m.undoStack)-1]
+			if entry.wasNew {
+				if err := os.Remove(entry.path); err != nil {
+					m.viewport.AddError(fmt.Errorf("undo failed: %w", err))
+				} else {
+					m.viewport.AddSlashOutput(fmt.Sprintf("Undo: deleted %s", entry.path))
+				}
+			} else {
+				if err := os.WriteFile(entry.path, []byte(entry.previous), 0644); err != nil {
+					m.viewport.AddError(fmt.Errorf("undo failed: %w", err))
+				} else {
+					m.viewport.AddSlashOutput(fmt.Sprintf("Undo: restored %s", entry.path))
+				}
+			}
+			return m, nil
+		}
+
 		if result.toggleAutoAccept {
 			m.autoAccept = !m.autoAccept
 			m.statusBar.SetAutoAccept(m.autoAccept)
@@ -675,7 +751,7 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 	if m.agentActive {
 		m.session.AddUser(prompt)
 		workDir, _ := os.Getwd()
-		ch, cmd := runAgentLoop(m.client, m.session.Messages, workDir, m.autoAccept)
+		ch, cmd := runAgentLoop(m.client, m.session.Messages, workDir, m.autoAccept, m.searchManager)
 		m.agentChan = ch
 		spinnerCmd := m.spinner.Start("Agent thinking...")
 		return m, tea.Batch(spinnerCmd, cmd, listenForAgentEvent(ch))
@@ -738,8 +814,10 @@ func (m Model) View() string {
 		midSection = m.input.View()
 	}
 
-	// Render model picker or completion popup above the input area.
-	if pickerView := m.modelPicker.View(); pickerView != "" {
+	// Render trace panel, model picker, or completion popup above the input area.
+	if traceView := m.tracePanel.View(); traceView != "" {
+		midSection = traceView + "\n" + midSection
+	} else if pickerView := m.modelPicker.View(); pickerView != "" {
 		midSection = pickerView + "\n" + midSection
 	} else if popupView := m.completion.View(m.width); popupView != "" {
 		midSection = popupView + "\n" + midSection

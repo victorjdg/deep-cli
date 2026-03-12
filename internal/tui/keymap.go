@@ -9,6 +9,7 @@ type keyMap struct {
 	ClearScreen key.Binding
 	Newline     key.Binding
 	ToggleAuto  key.Binding
+	ToggleTrace key.Binding
 }
 
 var keys = keyMap{
@@ -35,5 +36,9 @@ var keys = keyMap{
 	ToggleAuto: key.NewBinding(
 		key.WithKeys("ctrl+a"),
 		key.WithHelp("ctrl+a", "toggle auto-accept"),
+	),
+	ToggleTrace: key.NewBinding(
+		key.WithKeys("ctrl+t"),
+		key.WithHelp("ctrl+t", "toggle agent trace"),
 	),
 }

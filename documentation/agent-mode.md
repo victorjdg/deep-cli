@@ -36,6 +36,17 @@ Each tool execution is shown in the UI as:
   tool: run_command({"command": "go build ./..."})
 ```
 
+The spinner updates at each phase to indicate what is happening:
+
+```
+⠋ Agent thinking...        — model processing the prompt
+⠋ Reading file...          — read_file executing
+⠋ Searching the web...     — web_search executing
+⠋ Fetching page content... — fetch_url executing
+⠋ Running command...       — run_command executing
+⠋ Processing results...    — model processing tool results
+```
+
 ## Available Tools
 
 ### `list_files`
@@ -97,6 +108,7 @@ Writes text content to a file. Creates the file and any missing parent directori
 - Constrained to the working directory
 - Requires confirmation when auto-accept is OFF
 - The UI shows the path and line count: `write_file {"path":"output/result.md","content":"<3 lines>"}`
+- An undo entry is pushed to the stack after a successful write (restores previous content or deletes if new)
 
 ---
 
@@ -115,7 +127,8 @@ Applies a surgical edit to a file by replacing an exact string. More token-effic
 - Fails if `old_string` is not found in the file
 - Fails if `old_string` appears more than once (ambiguous edit)
 - Max file size: 512 KB
-- Requires confirmation when auto-accept is OFF
+- Requires confirmation when auto-accept is OFF — the confirmation prompt shows a coloured diff (red removed, green added) with 2 lines of context
+- An undo entry is pushed to the stack after a successful patch
 
 ---
 
@@ -178,6 +191,28 @@ Searches the web using the currently configured search engine.
 
 ---
 
+### `fetch_url`
+
+Fetches the full text content of a web page. Designed to be used after `web_search` to read the complete content of relevant URLs.
+
+```json
+{ "url": "https://doc.rust-lang.org/book/" }
+```
+
+- Content is truncated to 8 000 characters to avoid saturating the model context
+- Raw HTML is downloaded with a 15-second timeout and a 512 KB limit
+- **When Tavily is the active search engine**, uses the Tavily `/extract` API for higher quality extraction (falls back to generic fetch on error)
+- **For Brave and SearXNG**, uses HTTP GET + HTML cleaning: removes `<script>`, `<style>`, `<nav>`, `<header>`, `<footer>`, decodes HTML entities, and collapses whitespace
+- Sets a browser User-Agent to avoid bot-blocking by common sites
+
+Typical usage pattern:
+```
+web_search("Rust ownership model") → returns 5 URLs with short snippets
+fetch_url("https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html") → full chapter text
+```
+
+---
+
 ### `run_command`
 
 Runs a shell command via `sh -c` and returns the combined stdout+stderr output.
@@ -228,6 +263,32 @@ Absolute paths are also checked against the working directory boundary.
 ## Token Usage
 
 The agent loop accumulates token usage across all iterations (including tool result messages). The final total is added to the session's token count and reflected in `/cost`.
+
+## Tool Failure Handling
+
+When a tool fails, it is automatically disabled for the rest of the agent session:
+
+1. The error is shown in the viewport: `⚠ Tool 'web_search' failed and has been disabled for this session: ...`
+2. The tool is removed from the definitions sent to the model in subsequent iterations
+3. If the model somehow tries to call it again, the cached error is returned immediately
+
+Tools with missing configuration (e.g. `web_search` with no API key set) are removed from the definitions **before the first call** to the model, so no extra iterations are wasted.
+
+## Undo Stack
+
+Every successful `write_file` or `patch_file` operation pushes an entry onto an in-memory undo stack in the TUI. Use `/undo` to revert the last edit, one step at a time.
+
+- **New file**: `/undo` deletes the file
+- **Overwritten file**: `/undo` restores the previous content
+- The stack is LIFO — multiple `/undo` calls walk back through edits in reverse order
+- The stack is session-scoped and lost on exit
+- `run_command` is not tracked (shell side effects are not reversible)
+
+## Agent Trace Panel
+
+Press `Ctrl+T` at any time to open the agent trace panel, which shows all tool calls made during the current session along with their results. Useful for debugging unexpected agent behaviour.
+
+Entries accumulate in the background even when the panel is closed. See [tui-components.md](./tui-components.md) for the full widget description.
 
 ## Limitations
 

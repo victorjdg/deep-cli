@@ -23,6 +23,7 @@ var slashCommands = []commandInfo{
 	{name: "/model", desc: "Show or change model"},
 	{name: "/models", desc: "List available models"},
 	{name: "/search", desc: "Show or change search engine"},
+	{name: "/undo", desc: "Revert last agent file edit"},
 }
 
 type commandInfo struct {

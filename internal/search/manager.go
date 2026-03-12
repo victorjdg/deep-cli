@@ -2,6 +2,7 @@ package search
 
 import (
 	"fmt"
+	"os"
 	"sync"
 )
 
@@ -62,4 +63,16 @@ func (m *Manager) CurrentName() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.name
+}
+
+// IsConfigured returns true if the active engine has its required env var set.
+func (m *Manager) IsConfigured() bool {
+	m.mu.RLock()
+	name := m.name
+	m.mu.RUnlock()
+	envVar, ok := engineEnvVars[name]
+	if !ok {
+		return false
+	}
+	return os.Getenv(envVar) != ""
 }

@@ -121,6 +121,7 @@ Type any command starting with `/` in the interactive REPL:
 | `/agent`              | Toggle agent mode (tool calling) — cloud mode only           |
 | `/auto`               | Toggle auto-accept mode for file edits and commands          |
 | `/init`               | Analyze the current project and generate a `CONTEXT.md` file |
+| `/undo`               | Revert the last file edit made by the agent (stackable)      |
 | `/search [engine]`    | Show or change the active web search engine                  |
 | `/models`             | List all available models from the API                       |
 | `/model [name]`       | Show current model or switch to a new one                    |
@@ -145,6 +146,7 @@ Review these /file src/api.go /file src/types.go and suggest improvements
 | `Enter`   | Submit message                              |
 | `Ctrl+E`  | Toggle prompt enhancement                   |
 | `Ctrl+A`  | Toggle auto-accept mode                     |
+| `Ctrl+T`  | Toggle agent trace panel                    |
 | `Ctrl+L`  | Clear the screen                            |
 | `Ctrl+C`  | Cancel ongoing stream / Quit                |
 | `Ctrl+D`  | Quit                                        |
@@ -171,11 +173,16 @@ In cloud mode, the model can autonomously use tools to answer questions, explore
 | `glob`                | Find files matching a glob pattern (e.g. `**/*.go`)                    |
 | `get_file_info`       | Get metadata for a file: size, modification time, permissions, MIME    |
 | `web_search`          | Search the web using the configured search engine (max 5 results)      |
+| `fetch_url`           | Fetch the full text content of a web page (max 8 000 chars)            |
 | `run_command`         | Run a shell command and return its output (requires confirmation)      |
 
 The agent runs in a loop of up to 10 iterations: each iteration calls the LLM, executes any requested tools, feeds results back, and repeats until the model produces a final response with no tool calls.
 
 > **Security:** File tools are sandboxed to the current working directory. Path traversal attempts are blocked. `run_command` always asks for confirmation unless auto-accept mode is active.
+
+### Agent trace
+
+Press `Ctrl+T` at any time to open the trace panel, which shows every tool call made during the current session along with its result. Errors appear in red. The panel supports scrolling and accumulates entries even when closed.
 
 ### Auto-accept mode
 

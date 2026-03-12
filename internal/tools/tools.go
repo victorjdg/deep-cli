@@ -1,15 +1,19 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/victorjdg/deep-cli/internal/api"
 	"github.com/victorjdg/deep-cli/internal/search"
@@ -228,6 +232,23 @@ func Definitions() []api.ToolDefinition {
 				},
 			},
 		},
+		{
+			Type: "function",
+			Function: api.FunctionSchema{
+				Name:        "fetch_url",
+				Description: "Fetch the text content of a web page. Use this after web_search to read the full content of a relevant URL. Returns clean plain text extracted from the page.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"url": map[string]interface{}{
+							"type":        "string",
+							"description": "The URL to fetch.",
+						},
+					},
+					"required": []string{"url"},
+				},
+			},
+		},
 	}
 }
 
@@ -253,6 +274,8 @@ func Execute(name string, argsJSON string, workDir string) (string, error) {
 		return execReadMultipleFiles(argsJSON, workDir)
 	case "get_file_info":
 		return execGetFileInfo(argsJSON, workDir)
+	case "fetch_url":
+		return execFetchURL(argsJSON)
 	case "run_command":
 		return "", fmt.Errorf("run_command must be handled by the agent loop, not tools.Execute")
 	default:
@@ -685,6 +708,187 @@ func execGetFileInfo(argsJSON string, workDir string) (string, error) {
 		sb.WriteString(fmt.Sprintf("mime:     %s\n", mimeType))
 	}
 	return strings.TrimRight(sb.String(), "\n"), nil
+}
+
+const (
+	maxFetchBytes   = 512 * 1024 // 512 KB raw HTML limit
+	maxFetchContent = 8000       // chars of clean text returned to the model
+	fetchTimeout    = 15 * time.Second
+)
+
+type fetchURLArgs struct {
+	URL string `json:"url"`
+}
+
+func execFetchURL(argsJSON string) (string, error) {
+	var args fetchURLArgs
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if args.URL == "" {
+		return "", fmt.Errorf("url must not be empty")
+	}
+
+	// Use Tavily Extract API if Tavily is the active search engine.
+	if searchMgr != nil && searchMgr.CurrentName() == "tavily" {
+		if result, err := tavilyExtract(args.URL); err == nil {
+			return result, nil
+		}
+		// Fall through to generic fetch on Tavily error.
+	}
+
+	return genericFetch(args.URL)
+}
+
+// tavilyExtract uses the Tavily /extract endpoint for high-quality content extraction.
+func tavilyExtract(targetURL string) (string, error) {
+	apiKey := searchMgr.Current().(*search.Tavily).APIKey()
+	if apiKey == "" {
+		return "", fmt.Errorf("no Tavily API key")
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"api_key": apiKey,
+		"urls":    []string{targetURL},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.tavily.com/extract", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("tavily extract failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("tavily extract returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Results []struct {
+			URL        string `json:"url"`
+			RawContent string `json:"raw_content"`
+		} `json:"results"`
+		FailedResults []struct {
+			URL   string `json:"url"`
+			Error string `json:"error"`
+		} `json:"failed_results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if len(result.Results) == 0 {
+		if len(result.FailedResults) > 0 {
+			return "", fmt.Errorf("tavily extract failed for URL: %s", result.FailedResults[0].Error)
+		}
+		return "", fmt.Errorf("tavily extract returned no content")
+	}
+
+	content := strings.TrimSpace(result.Results[0].RawContent)
+	return truncateContent(content), nil
+}
+
+// genericFetch downloads a URL and extracts plain text from the HTML.
+func genericFetch(targetURL string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL: %w", err)
+	}
+	// Mimic a real browser to avoid bot-blocking.
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("server returned status %d", resp.StatusCode)
+	}
+
+	limited := io.LimitReader(resp.Body, maxFetchBytes)
+	raw, err := io.ReadAll(limited)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	text := extractText(string(raw))
+	if !utf8.ValidString(text) {
+		return "", fmt.Errorf("page content is not valid UTF-8")
+	}
+	if text == "" {
+		return "(no readable text content found)", nil
+	}
+	return truncateContent(text), nil
+}
+
+// tagPattern matches HTML tags, scripts, styles and comments.
+var (
+	reScript  = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
+	reStyle   = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
+	reComment = regexp.MustCompile(`(?s)<!--.*?-->`)
+	reNav     = regexp.MustCompile(`(?is)<(nav|header|footer|aside|menu)[^>]*>.*?</(nav|header|footer|aside|menu)>`)
+	reTag     = regexp.MustCompile(`<[^>]+>`)
+	reSpaces  = regexp.MustCompile(`[ \t]+`)
+	reLines   = regexp.MustCompile(`\n{3,}`)
+)
+
+// extractText removes HTML markup and returns clean plain text.
+func extractText(html string) string {
+	html = reScript.ReplaceAllString(html, " ")
+	html = reStyle.ReplaceAllString(html, " ")
+	html = reComment.ReplaceAllString(html, " ")
+	html = reNav.ReplaceAllString(html, " ")
+	// Replace block-level tags with newlines to preserve paragraph structure.
+	for _, tag := range []string{"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "br", "tr"} {
+		html = strings.ReplaceAll(html, "<"+tag, "\n<"+tag)
+		html = strings.ReplaceAll(html, "</"+tag+">", "\n")
+	}
+	text := reTag.ReplaceAllString(html, "")
+	// Decode common HTML entities.
+	text = strings.NewReplacer(
+		"&amp;", "&", "&lt;", "<", "&gt;", ">",
+		"&quot;", `"`, "&#39;", "'", "&nbsp;", " ",
+		"&mdash;", "—", "&ndash;", "–", "&hellip;", "...",
+	).Replace(text)
+	text = reSpaces.ReplaceAllString(text, " ")
+	text = reLines.ReplaceAllString(text, "\n\n")
+	return strings.TrimSpace(text)
+}
+
+// truncateContent caps the content at maxFetchContent chars with a notice.
+func truncateContent(s string) string {
+	if len(s) <= maxFetchContent {
+		return s
+	}
+	return s[:maxFetchContent] + "\n\n... (content truncated)"
+}
+
+// ReadPrevious reads the current content of a file before it is overwritten,
+// returning (content, true) if it exists or ("", false) if it is a new file.
+// Used by the agent loop to build undo entries before write_file / patch_file.
+func ReadPrevious(path, workDir string) (string, bool) {
+	target, err := safePath(path, workDir)
+	if err != nil {
+		return "", false
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return "", false // file doesn't exist yet
+	}
+	return string(data), true
 }
 
 // safePath resolves a path relative to workDir and ensures it doesn't escape it.

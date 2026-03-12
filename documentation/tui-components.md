@@ -18,6 +18,7 @@ type Model struct {
     completion  completionState
     modelPicker modelPicker
     confirmPrompt confirmPrompt
+    tracePanel  tracePanel
     history     *promptHistory
 
     enhanceActive      bool
@@ -27,6 +28,8 @@ type Model struct {
     pendingMessage     string
     agentChan          <-chan agentEvent
     confirmReplyCh     chan<- bool
+    searchManager      *search.Manager
+    undoStack          []agentUndoEntry
 
     state        state  // stateReady | stateStreaming | stateConfirm
     streamBuf    *strings.Builder
@@ -138,6 +141,34 @@ Two visual variants:
 
 Press `y`/`Y` to approve or `n`/`N`/`Escape` to cancel. Either answer unblocks the agent goroutine.
 
+## Trace Panel (`tracepanel.go`)
+
+Popup shown when the user presses `Ctrl+T`. Displays all tool calls made by the agent during the current session, including their arguments and results.
+
+```
+╭─ Agent Trace  3 tool calls ────────────────────────────────────╮
+│ Agent Trace  3 tool calls                                       │
+│ ↑↓ scroll · Ctrl+T close                                       │
+│                                                                 │
+│ [1] list_files({"path":"."})                                    │
+│     main.go                                                     │
+│     internal/                                                   │
+│                                                                 │
+│ [2] web_search({"query":"B-tree"})                              │
+│     Error: search not configured                                │
+│                                                                 │
+│ [3] read_file({"path":"internal/tools/tools.go"})               │
+│     package tools...                                            │
+╰─────────────────────────────────────────────────────────────────╯
+```
+
+- Entries accumulate in the background even when the panel is closed
+- Errors are shown in red, normal results in white
+- Arguments are truncated to 80 chars to avoid noise
+- Result lines are truncated to the panel width
+- Supports scroll with `↑`/`↓`
+- `Ctrl+T` toggles open/close
+
 ## Autocomplete (`autocomplete.go`)
 
 Popup menu shown above the input area when typing:
@@ -165,8 +196,9 @@ Stores the last 20 submitted prompts (no consecutive duplicates). Navigate with 
 Defines all `tea.Cmd` factory functions and their corresponding `tea.Msg` result types. This is where async work is initiated:
 
 ```
-startStream()           → streamStartMsg → streamChunkMsg... → streamDoneMsg/streamErrMsg
-runAgentLoop()          → agentToolUseMsg... → agentConfirmMsg? → agentDoneMsg/agentErrMsg
+startStream()           → streamChunkMsg (batched ~50ms)... → streamDoneMsg/streamErrMsg
+runAgentLoop()          → agentSpinnerMsg → agentToolUseMsg → agentTraceMsg → agentUndoEntry
+                          → agentConfirmMsg? → agentWarnMsg? → agentDoneMsg/agentErrMsg
 enhancePrompt()         → enhanceDoneMsg
 compactConversation()   → compactDoneMsg
 fetchModels()           → modelsListMsg
@@ -174,7 +206,10 @@ checkConnection()       → connectionCheckMsg
 initProject()           → initDoneMsg
 ```
 
-Also contains `execRunCommand()` which runs shell commands with a 30-second timeout and captures stdout+stderr.
+Also contains:
+- `execRunCommand()` — runs shell commands with a 30-second timeout, captures stdout+stderr
+- `buildPatchDiff()` — generates a line-level diff with context lines for `patch_file` confirmations
+- `tools.ReadPrevious()` — reads the current file content before a write, used to build undo entries
 
 ## Init (`init.go`)
 
@@ -210,3 +245,4 @@ Documents keybindings used throughout the app:
 | `Ctrl+L`  | Clear screen              |
 | `Ctrl+E`  | Toggle prompt enhancement |
 | `Ctrl+A`  | Toggle auto-accept        |
+| `Ctrl+T`  | Toggle agent trace panel  |
