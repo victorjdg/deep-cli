@@ -2,6 +2,8 @@
 
 A terminal AI assistant powered by [DeepSeek](https://deepseek.com), written in Go. Supports both cloud mode (DeepSeek API) and local mode (Ollama), with a rich interactive TUI, agent mode with tool calling, web search capabilities, and file editing with confirmation controls.
 
+![Deep-CLI screenshot](assets/screenshot.png)
+
 ## Features
 
 - **Interactive TUI** with streaming responses and markdown rendering
