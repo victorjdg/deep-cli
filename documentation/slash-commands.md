@@ -97,6 +97,23 @@ The generated `CONTEXT.md` can be loaded into context with `/file CONTEXT.md` at
 
 ---
 
+### `/undo`
+
+Reverts the last file edit made by the agent (`write_file` or `patch_file`), one step at a time.
+
+```
+/undo    → restores the previous content of the last edited file
+/undo    → (again) restores the file edited before that
+```
+
+- Uses an in-memory LIFO stack — entries accumulate during the session and are lost on exit
+- If the agent created a new file, `/undo` deletes it
+- If the agent overwrote an existing file, `/undo` restores its previous content
+- `run_command` edits are not tracked (shell commands are not reversible)
+- Reports the path of the restored file: `Undo: restored internal/tools/tools.go`
+
+---
+
 ### `/search [engine]`
 
 Shows or changes the active web search engine.

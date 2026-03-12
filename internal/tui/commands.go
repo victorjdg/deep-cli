@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/victorjdg/deep-cli/internal/api"
+	"github.com/victorjdg/deep-cli/internal/search"
 	"github.com/victorjdg/deep-cli/internal/tools"
 )
 
@@ -23,6 +25,7 @@ type streamStartMsg struct {
 
 type streamChunkMsg struct {
 	content string
+	done    *api.StreamChunk // non-nil when a Done chunk arrived in the same batch
 }
 
 type streamDoneMsg struct {
@@ -49,9 +52,14 @@ func startStream(client api.Client, messages []api.Message, ctx context.Context)
 	}
 }
 
-// listenForChunk reads the next chunk from the channel.
+const streamThrottleInterval = 50 * time.Millisecond
+
+// listenForChunk drains the stream channel for up to streamThrottleInterval,
+// batching all chunks into a single streamChunkMsg. This reduces viewport
+// redraws from ~100/s to ~20/s without affecting streaming latency.
 func listenForChunk(ch <-chan api.StreamChunk) tea.Cmd {
 	return func() tea.Msg {
+		// Block until the first chunk arrives.
 		chunk, ok := <-ch
 		if !ok {
 			return streamDoneMsg{}
@@ -62,7 +70,32 @@ func listenForChunk(ch <-chan api.StreamChunk) tea.Cmd {
 		if chunk.Done {
 			return streamDoneMsg{usage: chunk.Usage}
 		}
-		return streamChunkMsg{content: chunk.Content}
+
+		buf := chunk.Content
+		deadline := time.NewTimer(streamThrottleInterval)
+		defer deadline.Stop()
+
+		// Drain any additional chunks that arrive within the throttle window.
+		for {
+			select {
+			case c, ok := <-ch:
+				if !ok {
+					// Channel closed mid-batch — flush what we have, next call will return done.
+					return streamChunkMsg{content: buf}
+				}
+				if c.Err != nil {
+					return streamErrMsg{err: c.Err}
+				}
+				if c.Done {
+					// Flush accumulated content first; done will be picked up next call.
+					// Put the done signal back by returning the chunk with content.
+					return streamChunkMsg{content: buf, done: &c}
+				}
+				buf += c.Content
+			case <-deadline.C:
+				return streamChunkMsg{content: buf}
+			}
+		}
 	}
 }
 
@@ -133,14 +166,35 @@ type agentErrMsg struct {
 
 // agentToolUseMsg is sent when the agent calls a tool, for display purposes.
 type agentToolUseMsg struct {
-	name string
-	args string
+	name         string
+	args         string
+	spinnerLabel string
+}
+
+// agentSpinnerMsg updates the spinner label without changing other state.
+type agentSpinnerMsg struct {
+	label string
+}
+
+// agentTraceMsg records a completed tool call for the trace panel.
+type agentTraceMsg struct {
+	tool   string
+	args   string
+	result string
+}
+
+// agentUndoEntry records a reversible file operation for the undo stack.
+type agentUndoEntry struct {
+	path     string // absolute path
+	previous string // content before the edit ("" + wasNew=true means delete on undo)
+	wasNew   bool   // true if the file did not exist before
 }
 
 type agentConfirmRequest struct {
 	kind    confirmKind
 	title   string
 	detail  string
+	diff    []diffLine
 	replyCh chan bool
 }
 
@@ -149,7 +203,13 @@ type agentConfirmMsg struct {
 	kind    confirmKind
 	title   string
 	detail  string
+	diff    []diffLine
 	replyCh chan bool
+}
+
+// agentWarnMsg is sent to the TUI to display a warning without stopping the loop.
+type agentWarnMsg struct {
+	text string
 }
 
 type agentEvent struct {
@@ -157,13 +217,17 @@ type agentEvent struct {
 	content        string
 	usage          api.TokenUsage
 	err            error
-	tool           *agentToolUseMsg   // non-nil when a tool is being called
+	tool           *agentToolUseMsg     // non-nil when a tool is being called
 	confirmRequest *agentConfirmRequest // non-nil when run_command needs approval
+	warn           string               // non-empty to show a warning in the viewport
+	spinnerLabel   string               // non-empty to update the spinner label
+	trace          *agentTraceMsg       // non-nil when a tool call completed
+	undoEntry      *agentUndoEntry      // non-nil when a file was written/patched
 }
 
 const maxAgentIterations = 10
 
-func runAgentLoop(client api.Client, messages []api.Message, workDir string, autoAccept bool) (<-chan agentEvent, tea.Cmd) {
+func runAgentLoop(client api.Client, messages []api.Message, workDir string, autoAccept bool, searchMgr *search.Manager) (<-chan agentEvent, tea.Cmd) {
 	ch := make(chan agentEvent)
 	cmd := func() tea.Msg {
 		defer close(ch)
@@ -172,8 +236,22 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 
 		defs := tools.Definitions()
 		var totalUsage api.TokenUsage
+		// failedTools tracks tools that have errored this session.
+		// On failure: remove the tool from defs so the model can't call it again,
+		// and cache the error in case it somehow tries anyway.
+		failedTools := make(map[string]string)
+
+		// Pre-check: remove web_search if no search engine is configured.
+		if searchMgr == nil || !searchMgr.IsConfigured() {
+			defs = removeTool(defs, "web_search")
+		}
 
 		for i := 0; i < maxAgentIterations; i++ {
+			if i == 0 {
+				ch <- agentEvent{spinnerLabel: "Agent thinking..."}
+			} else {
+				ch <- agentEvent{spinnerLabel: "Processing results..."}
+			}
 			content, toolCalls, usage, err := client.CompleteWithTools(context.Background(), msgs, defs)
 			if err != nil {
 				ch <- agentEvent{err: err}
@@ -218,7 +296,10 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 					}
 				}
 
-				ch <- agentEvent{tool: &agentToolUseMsg{name: tc.Function.Name, args: displayArgs}}
+				ch <- agentEvent{
+					tool:         &agentToolUseMsg{name: tc.Function.Name, args: displayArgs},
+					spinnerLabel: spinnerLabelForTool(tc.Function.Name),
+				}
 
 				var result string
 				var execErr error
@@ -231,7 +312,7 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 					if err := json.Unmarshal([]byte(tc.Function.Arguments), &cmdArgs); err != nil {
 						result = fmt.Sprintf("Error: invalid arguments: %s", err)
 					} else {
-						approved := autoAccept || requestConfirm(ch, confirmKindCommand, cmdArgs.Command, "")
+						approved := autoAccept || requestConfirm(ch, confirmKindCommand, cmdArgs.Command, "", nil)
 						if !approved {
 							result = "User declined to run the command."
 						} else {
@@ -250,14 +331,22 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 					if err := json.Unmarshal([]byte(tc.Function.Arguments), &fileArgs); err != nil {
 						result = fmt.Sprintf("Error: invalid arguments: %s", err)
 					} else {
+						prev, existed := tools.ReadPrevious(fileArgs.Path, workDir)
 						detail := fmt.Sprintf("%d lines", strings.Count(fileArgs.Content, "\n")+1)
-						approved := autoAccept || requestConfirm(ch, confirmKindEdit, fileArgs.Path, detail)
+						approved := autoAccept || requestConfirm(ch, confirmKindEdit, fileArgs.Path, detail, nil)
 						if !approved {
 							result = "User declined the file write."
 						} else {
 							result, execErr = tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
 							if execErr != nil {
 								result = fmt.Sprintf("Error: %s", execErr)
+							} else {
+								absPath, _ := filepath.Abs(filepath.Join(workDir, fileArgs.Path))
+								ch <- agentEvent{undoEntry: &agentUndoEntry{
+									path:     absPath,
+									previous: prev,
+									wasNew:   !existed,
+								}}
 							}
 						}
 					}
@@ -271,24 +360,48 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 					if err := json.Unmarshal([]byte(tc.Function.Arguments), &patchArgs); err != nil {
 						result = fmt.Sprintf("Error: invalid arguments: %s", err)
 					} else {
+						prev, existed := tools.ReadPrevious(patchArgs.Path, workDir)
+						diff := buildPatchDiff(patchArgs.OldString, patchArgs.NewString, 2, 20)
 						detail := fmt.Sprintf("replace %d chars → %d chars", len(patchArgs.OldString), len(patchArgs.NewString))
-						approved := autoAccept || requestConfirm(ch, confirmKindEdit, patchArgs.Path, detail)
+						approved := autoAccept || requestConfirm(ch, confirmKindEdit, patchArgs.Path, detail, diff)
 						if !approved {
 							result = "User declined the file edit."
 						} else {
 							result, execErr = tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
 							if execErr != nil {
 								result = fmt.Sprintf("Error: %s", execErr)
+							} else if existed {
+								absPath, _ := filepath.Abs(filepath.Join(workDir, patchArgs.Path))
+								ch <- agentEvent{undoEntry: &agentUndoEntry{
+									path:     absPath,
+									previous: prev,
+									wasNew:   false,
+								}}
 							}
 						}
 					}
 
 				default:
-					result, execErr = tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
-					if execErr != nil {
-						result = fmt.Sprintf("Error: %s", execErr)
+					// If this tool already failed this session, block the retry immediately.
+					if cachedErr, failed := failedTools[tc.Function.Name]; failed {
+						result = cachedErr
+					} else {
+						result, execErr = tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
+						if execErr != nil {
+							result = fmt.Sprintf("Error: %s", execErr)
+							failedTools[tc.Function.Name] = result
+							// Remove from defs so the model won't call it again next iteration.
+							defs = removeTool(defs, tc.Function.Name)
+							ch <- agentEvent{warn: fmt.Sprintf("Tool '%s' failed and has been disabled for this session: %s", tc.Function.Name, execErr)}
+						}
 					}
 				}
+
+				ch <- agentEvent{trace: &agentTraceMsg{
+					tool:   tc.Function.Name,
+					args:   displayArgs,
+					result: result,
+				}}
 
 				msgs = append(msgs, api.Message{
 					Role:       api.RoleTool,
@@ -306,12 +419,13 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 
 // requestConfirm sends a confirmation request through the agent channel and blocks
 // until the TUI responds. Returns true if the user approved.
-func requestConfirm(ch chan<- agentEvent, kind confirmKind, title, detail string) bool {
+func requestConfirm(ch chan<- agentEvent, kind confirmKind, title, detail string, diff []diffLine) bool {
 	replyCh := make(chan bool, 1)
 	ch <- agentEvent{confirmRequest: &agentConfirmRequest{
 		kind:    kind,
 		title:   title,
 		detail:  detail,
+		diff:    diff,
 		replyCh: replyCh,
 	}}
 	return <-replyCh
@@ -320,28 +434,45 @@ func requestConfirm(ch chan<- agentEvent, kind confirmKind, title, detail string
 // listenForAgentEvent reads the next event from the agent channel.
 func listenForAgentEvent(ch <-chan agentEvent) tea.Cmd {
 	return func() tea.Msg {
-		ev, ok := <-ch
-		if !ok {
-			return nil
-		}
-		if ev.err != nil {
-			return agentErrMsg{err: ev.err}
-		}
-		if ev.confirmRequest != nil {
-			return agentConfirmMsg{
-				kind:    ev.confirmRequest.kind,
-				title:   ev.confirmRequest.title,
-				detail:  ev.confirmRequest.detail,
-				replyCh: ev.confirmRequest.replyCh,
+		for {
+			ev, ok := <-ch
+			if !ok {
+				// Channel closed without a done/err event — treat as unexpected termination.
+				return agentErrMsg{err: fmt.Errorf("agent loop ended unexpectedly")}
 			}
+			if ev.err != nil {
+				return agentErrMsg{err: ev.err}
+			}
+			if ev.warn != "" {
+				return agentWarnMsg{text: ev.warn}
+			}
+			if ev.trace != nil {
+				return agentTraceMsg{tool: ev.trace.tool, args: ev.trace.args, result: ev.trace.result}
+			}
+			if ev.undoEntry != nil {
+				return *ev.undoEntry
+			}
+			if ev.spinnerLabel != "" && ev.tool == nil && ev.confirmRequest == nil {
+				// Pure spinner update — no tool call yet.
+				return agentSpinnerMsg{label: ev.spinnerLabel}
+			}
+			if ev.confirmRequest != nil {
+				return agentConfirmMsg{
+					kind:    ev.confirmRequest.kind,
+					title:   ev.confirmRequest.title,
+					detail:  ev.confirmRequest.detail,
+					diff:    ev.confirmRequest.diff,
+					replyCh: ev.confirmRequest.replyCh,
+				}
+			}
+			if ev.tool != nil {
+				return agentToolUseMsg{name: ev.tool.name, args: ev.tool.args, spinnerLabel: ev.spinnerLabel}
+			}
+			if ev.done {
+				return agentDoneMsg{content: ev.content, usage: ev.usage}
+			}
+			// Empty event — keep reading instead of returning nil to BubbleTea.
 		}
-		if ev.tool != nil {
-			return *ev.tool
-		}
-		if ev.done {
-			return agentDoneMsg{content: ev.content, usage: ev.usage}
-		}
-		return nil
 	}
 }
 
@@ -393,6 +524,135 @@ func initProject(client api.Client, workDir string) tea.Cmd {
 		}
 		return initDoneMsg{summary: summary, usage: usage}
 	}
+}
+
+type diffLineKind int
+
+const (
+	diffContext diffLineKind = iota
+	diffAdded
+	diffRemoved
+)
+
+type diffLine struct {
+	kind    diffLineKind
+	content string
+}
+
+// buildPatchDiff produces a simple line-level diff between oldStr and newStr,
+// with up to contextLines of surrounding context. The result is capped at maxDiffLines.
+func buildPatchDiff(oldStr, newStr string, contextLines, maxDiffLines int) []diffLine {
+	oldLines := strings.Split(oldStr, "\n")
+	newLines := strings.Split(newStr, "\n")
+
+	var result []diffLine
+
+	// Find first and last differing line.
+	firstDiff, lastDiff := 0, 0
+	maxLen := len(oldLines)
+	if len(newLines) > maxLen {
+		maxLen = len(newLines)
+	}
+	found := false
+	for i := 0; i < maxLen; i++ {
+		oldLine := ""
+		newLine := ""
+		if i < len(oldLines) {
+			oldLine = oldLines[i]
+		}
+		if i < len(newLines) {
+			newLine = newLines[i]
+		}
+		if oldLine != newLine {
+			if !found {
+				firstDiff = i
+				found = true
+			}
+			lastDiff = i
+		}
+	}
+	if !found {
+		return nil
+	}
+
+	start := firstDiff - contextLines
+	if start < 0 {
+		start = 0
+	}
+	end := lastDiff + contextLines
+	if end >= maxLen {
+		end = maxLen - 1
+	}
+
+	for i := start; i <= end; i++ {
+		if len(result) >= maxDiffLines {
+			result = append(result, diffLine{kind: diffContext, content: "..."})
+			break
+		}
+		oldLine := ""
+		newLine := ""
+		if i < len(oldLines) {
+			oldLine = oldLines[i]
+		}
+		if i < len(newLines) {
+			newLine = newLines[i]
+		}
+		if i < firstDiff || i > lastDiff {
+			// Context line — show old content (same as new in context range).
+			if i < len(oldLines) {
+				result = append(result, diffLine{kind: diffContext, content: oldLines[i]})
+			}
+		} else {
+			if oldLine != "" || i < len(oldLines) {
+				result = append(result, diffLine{kind: diffRemoved, content: oldLine})
+			}
+			if newLine != "" || i < len(newLines) {
+				result = append(result, diffLine{kind: diffAdded, content: newLine})
+			}
+		}
+	}
+	return result
+}
+
+// spinnerLabelForTool returns a human-readable label for the spinner while a tool runs.
+func spinnerLabelForTool(name string) string {
+	switch name {
+	case "web_search":
+		return "Searching the web..."
+	case "fetch_url":
+		return "Fetching page content..."
+	case "read_file":
+		return "Reading file..."
+	case "read_multiple_files":
+		return "Reading files..."
+	case "write_file":
+		return "Writing file..."
+	case "patch_file":
+		return "Patching file..."
+	case "list_files":
+		return "Listing files..."
+	case "search_files":
+		return "Searching files..."
+	case "glob":
+		return "Finding files..."
+	case "get_file_info":
+		return "Getting file info..."
+	case "run_command":
+		return "Running command..."
+	default:
+		return fmt.Sprintf("Calling %s...", name)
+	}
+}
+
+// removeTool returns a new slice with the named tool removed.
+func removeTool(defs []api.ToolDefinition, name string) []api.ToolDefinition {
+	result := defs[:0:0]
+	for _, d := range defs {
+		if d.Function.Name != name {
+			result = append(result, d)
+		}
+	}
+	return result
 }
 
 func compactConversation(client api.Client, messages []api.Message) tea.Cmd {

@@ -30,6 +30,7 @@ type slashResult struct {
 	toggleAgent      bool   // toggles agent mode (tool calling)
 	toggleAutoAccept bool   // toggles auto-accept mode
 	initProject      bool   // triggers CONTEXT.md generation
+	undo             bool   // reverts the last agent file edit
 	fileContent      string // content to inject into session as user context
 }
 
@@ -65,6 +66,7 @@ func handleSlashCommand(input string, currentModel string, cost costInfo) slashR
   /agent             Toggle agent mode (tool calling)
   /auto              Toggle auto-accept (skip confirmation for file edits and commands)
   /init              Generate a CONTEXT.md file for the current project
+  /undo              Revert the last file edit made by the agent
   /search [engine]   Show or change search engine (tavily, brave, searxng)
   /models            List available models from the API
   /model [name]      Show or change the current model
@@ -75,6 +77,7 @@ Shortcuts:
   Enter          Submit message
   Ctrl+E         Toggle prompt enhancement
   Ctrl+A         Toggle auto-accept
+  Ctrl+T         Toggle agent trace panel
   Ctrl+C         Cancel streaming / Quit
   Ctrl+D         Quit
   Ctrl+L         Clear screen`,
@@ -142,6 +145,9 @@ Shortcuts:
 
 	case "/init":
 		return slashResult{initProject: true}
+
+	case "/undo":
+		return slashResult{undo: true}
 
 	case "/exit":
 		return slashResult{quit: true}
@@ -222,7 +228,7 @@ func looksLikePath(s string) bool {
 		return true
 	}
 	// Known slash commands.
-	cmds := []string{"/help", "/clear", "/compact", "/enhance", "/agent", "/auto", "/init", "/search", "/models", "/model", "/cost", "/exit", "/file"}
+	cmds := []string{"/help", "/clear", "/compact", "/enhance", "/agent", "/auto", "/init", "/undo", "/search", "/models", "/model", "/cost", "/exit", "/file"}
 	lower := strings.ToLower(s)
 	for _, c := range cmds {
 		if lower == c {

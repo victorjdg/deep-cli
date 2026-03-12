@@ -18,7 +18,8 @@ func NewTavily() *Tavily {
 	return &Tavily{apiKey: os.Getenv("TAVILY_API_KEY")}
 }
 
-func (t *Tavily) Name() string { return "tavily" }
+func (t *Tavily) Name() string    { return "tavily" }
+func (t *Tavily) APIKey() string  { return t.apiKey }
 
 func (t *Tavily) Search(ctx context.Context, query string, maxResults int) ([]Result, error) {
 	if t.apiKey == "" {
