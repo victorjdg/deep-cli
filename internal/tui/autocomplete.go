@@ -11,6 +11,7 @@ import (
 
 var slashCommands = []commandInfo{
 	{name: "/agent", desc: "Toggle agent mode (tool calling)"},
+	{name: "/auto", desc: "Toggle auto-accept edits and commands"},
 	{name: "/clear", desc: "Clear conversation history"},
 	{name: "/compact", desc: "Compact conversation context"},
 	{name: "/cost", desc: "Show token usage"},
@@ -18,6 +19,7 @@ var slashCommands = []commandInfo{
 	{name: "/exit", desc: "Exit the application"},
 	{name: "/file", desc: "Load file(s) into context"},
 	{name: "/help", desc: "Show available commands"},
+	{name: "/init", desc: "Generate CONTEXT.md for this project"},
 	{name: "/model", desc: "Show or change model"},
 	{name: "/models", desc: "List available models"},
 	{name: "/search", desc: "Show or change search engine"},

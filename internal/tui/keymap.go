@@ -3,11 +3,12 @@ package tui
 import "github.com/charmbracelet/bubbles/key"
 
 type keyMap struct {
-	Submit    key.Binding
-	Quit      key.Binding
-	Cancel    key.Binding
+	Submit      key.Binding
+	Quit        key.Binding
+	Cancel      key.Binding
 	ClearScreen key.Binding
-	Newline   key.Binding
+	Newline     key.Binding
+	ToggleAuto  key.Binding
 }
 
 var keys = keyMap{
@@ -30,5 +31,9 @@ var keys = keyMap{
 	Newline: key.NewBinding(
 		key.WithKeys("shift+enter"),
 		key.WithHelp("shift+enter", "newline"),
+	),
+	ToggleAuto: key.NewBinding(
+		key.WithKeys("ctrl+a"),
+		key.WithHelp("ctrl+a", "toggle auto-accept"),
 	),
 }

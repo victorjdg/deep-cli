@@ -1,10 +1,14 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/victorjdg/deep-cli/internal/api"
@@ -133,17 +137,33 @@ type agentToolUseMsg struct {
 	args string
 }
 
+type agentConfirmRequest struct {
+	kind    confirmKind
+	title   string
+	detail  string
+	replyCh chan bool
+}
+
+// agentConfirmMsg is sent to the TUI when an action needs user approval.
+type agentConfirmMsg struct {
+	kind    confirmKind
+	title   string
+	detail  string
+	replyCh chan bool
+}
+
 type agentEvent struct {
-	done    bool
-	content string
-	usage   api.TokenUsage
-	err     error
-	tool    *agentToolUseMsg // non-nil when a tool is being called
+	done           bool
+	content        string
+	usage          api.TokenUsage
+	err            error
+	tool           *agentToolUseMsg   // non-nil when a tool is being called
+	confirmRequest *agentConfirmRequest // non-nil when run_command needs approval
 }
 
 const maxAgentIterations = 10
 
-func runAgentLoop(client api.Client, messages []api.Message, workDir string) (<-chan agentEvent, tea.Cmd) {
+func runAgentLoop(client api.Client, messages []api.Message, workDir string, autoAccept bool) (<-chan agentEvent, tea.Cmd) {
 	ch := make(chan agentEvent)
 	cmd := func() tea.Msg {
 		defer close(ch)
@@ -177,7 +197,10 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string) (<-
 			// Execute each tool and send progress events.
 			for _, tc := range toolCalls {
 				displayArgs := tc.Function.Arguments
-				if tc.Function.Name == "write_file" {
+
+				// Build a compact display string for write_file and run_command.
+				switch tc.Function.Name {
+				case "write_file":
 					var preview struct {
 						Path    string `json:"path"`
 						Content string `json:"content"`
@@ -186,13 +209,87 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string) (<-
 						lines := strings.Count(preview.Content, "\n") + 1
 						displayArgs = fmt.Sprintf(`{"path":%q,"content":"<%d lines>"}`, preview.Path, lines)
 					}
+				case "run_command":
+					var preview struct {
+						Command string `json:"command"`
+					}
+					if err := json.Unmarshal([]byte(tc.Function.Arguments), &preview); err == nil {
+						displayArgs = fmt.Sprintf(`{"command":%q}`, preview.Command)
+					}
 				}
+
 				ch <- agentEvent{tool: &agentToolUseMsg{name: tc.Function.Name, args: displayArgs}}
 
-				result, execErr := tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
-				if execErr != nil {
-					result = fmt.Sprintf("Error: %s", execErr)
+				var result string
+				var execErr error
+
+				switch tc.Function.Name {
+				case "run_command":
+					var cmdArgs struct {
+						Command string `json:"command"`
+					}
+					if err := json.Unmarshal([]byte(tc.Function.Arguments), &cmdArgs); err != nil {
+						result = fmt.Sprintf("Error: invalid arguments: %s", err)
+					} else {
+						approved := autoAccept || requestConfirm(ch, confirmKindCommand, cmdArgs.Command, "")
+						if !approved {
+							result = "User declined to run the command."
+						} else {
+							result, execErr = execRunCommand(cmdArgs.Command)
+							if execErr != nil {
+								result = fmt.Sprintf("Error: %s", execErr)
+							}
+						}
+					}
+
+				case "write_file":
+					var fileArgs struct {
+						Path    string `json:"path"`
+						Content string `json:"content"`
+					}
+					if err := json.Unmarshal([]byte(tc.Function.Arguments), &fileArgs); err != nil {
+						result = fmt.Sprintf("Error: invalid arguments: %s", err)
+					} else {
+						detail := fmt.Sprintf("%d lines", strings.Count(fileArgs.Content, "\n")+1)
+						approved := autoAccept || requestConfirm(ch, confirmKindEdit, fileArgs.Path, detail)
+						if !approved {
+							result = "User declined the file write."
+						} else {
+							result, execErr = tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
+							if execErr != nil {
+								result = fmt.Sprintf("Error: %s", execErr)
+							}
+						}
+					}
+
+				case "patch_file":
+					var patchArgs struct {
+						Path      string `json:"path"`
+						OldString string `json:"old_string"`
+						NewString string `json:"new_string"`
+					}
+					if err := json.Unmarshal([]byte(tc.Function.Arguments), &patchArgs); err != nil {
+						result = fmt.Sprintf("Error: invalid arguments: %s", err)
+					} else {
+						detail := fmt.Sprintf("replace %d chars → %d chars", len(patchArgs.OldString), len(patchArgs.NewString))
+						approved := autoAccept || requestConfirm(ch, confirmKindEdit, patchArgs.Path, detail)
+						if !approved {
+							result = "User declined the file edit."
+						} else {
+							result, execErr = tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
+							if execErr != nil {
+								result = fmt.Sprintf("Error: %s", execErr)
+							}
+						}
+					}
+
+				default:
+					result, execErr = tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
+					if execErr != nil {
+						result = fmt.Sprintf("Error: %s", execErr)
+					}
 				}
+
 				msgs = append(msgs, api.Message{
 					Role:       api.RoleTool,
 					Content:    result,
@@ -207,6 +304,19 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string) (<-
 	return ch, cmd
 }
 
+// requestConfirm sends a confirmation request through the agent channel and blocks
+// until the TUI responds. Returns true if the user approved.
+func requestConfirm(ch chan<- agentEvent, kind confirmKind, title, detail string) bool {
+	replyCh := make(chan bool, 1)
+	ch <- agentEvent{confirmRequest: &agentConfirmRequest{
+		kind:    kind,
+		title:   title,
+		detail:  detail,
+		replyCh: replyCh,
+	}}
+	return <-replyCh
+}
+
 // listenForAgentEvent reads the next event from the agent channel.
 func listenForAgentEvent(ch <-chan agentEvent) tea.Cmd {
 	return func() tea.Msg {
@@ -217,6 +327,14 @@ func listenForAgentEvent(ch <-chan agentEvent) tea.Cmd {
 		if ev.err != nil {
 			return agentErrMsg{err: ev.err}
 		}
+		if ev.confirmRequest != nil {
+			return agentConfirmMsg{
+				kind:    ev.confirmRequest.kind,
+				title:   ev.confirmRequest.title,
+				detail:  ev.confirmRequest.detail,
+				replyCh: ev.confirmRequest.replyCh,
+			}
+		}
 		if ev.tool != nil {
 			return *ev.tool
 		}
@@ -224,6 +342,56 @@ func listenForAgentEvent(ch <-chan agentEvent) tea.Cmd {
 			return agentDoneMsg{content: ev.content, usage: ev.usage}
 		}
 		return nil
+	}
+}
+
+const maxCommandOutput = 32 * 1024 // 32 KB
+
+func execRunCommand(command string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	_ = cmd.Run() // intentionally ignore error; output carries the failure info
+	output := out.String()
+	if len(output) > maxCommandOutput {
+		output = output[:maxCommandOutput] + "\n... (output truncated)"
+	}
+	if output == "" {
+		output = "(no output)"
+	}
+	return output, nil
+}
+
+type initDoneMsg struct {
+	summary string
+	usage   api.TokenUsage
+	err     error
+}
+
+func initProject(client api.Client, workDir string) tea.Cmd {
+	return func() tea.Msg {
+		prompt := buildInitPrompt(workDir)
+		messages := []api.Message{
+			{Role: api.RoleUser, Content: prompt},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		raw, usage, err := client.Complete(ctx, messages)
+		if err != nil {
+			return initDoneMsg{err: err}
+		}
+		contextContent, summary := splitInitResponse(raw)
+		// Write only the CONTEXT.md portion to disk.
+		outPath := workDir + "/CONTEXT.md"
+		if writeErr := os.WriteFile(outPath, []byte(contextContent), 0644); writeErr != nil {
+			return initDoneMsg{err: fmt.Errorf("generated content but could not write CONTEXT.md: %w", writeErr)}
+		}
+		return initDoneMsg{summary: summary, usage: usage}
 	}
 }
 

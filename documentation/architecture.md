@@ -53,28 +53,49 @@ User keypress
 
 Long-running operations (API calls, agent loops, streaming) run in goroutines returned as `tea.Cmd`. Each returns a typed `tea.Msg` when done:
 
-| Operation       | Cmd                      | Msg               |
-|-----------------|--------------------------|-------------------|
-| Stream response | `startStream()`          | `streamChunkMsg`, `streamDoneMsg`, `streamErrMsg` |
-| Agent loop      | `runAgentLoop()`         | `agentToolUseMsg`, `agentDoneMsg`, `agentErrMsg` |
-| Compact context | `compactConversation()`  | `compactDoneMsg`  |
-| Enhance prompt  | `enhancePrompt()`        | `enhanceDoneMsg`  |
-| Fetch models    | `fetchModels()`          | `modelsListMsg`   |
-| Check connection| `checkConnection()`      | `connectionCheckMsg` |
+| Operation        | Cmd                      | Msg                                               |
+|------------------|--------------------------|---------------------------------------------------|
+| Stream response  | `startStream()`          | `streamChunkMsg`, `streamDoneMsg`, `streamErrMsg` |
+| Agent loop       | `runAgentLoop()`         | `agentToolUseMsg`, `agentConfirmMsg`, `agentDoneMsg`, `agentErrMsg` |
+| Compact context  | `compactConversation()`  | `compactDoneMsg`                                  |
+| Enhance prompt   | `enhancePrompt()`        | `enhanceDoneMsg`                                  |
+| Fetch models     | `fetchModels()`          | `modelsListMsg`                                   |
+| Check connection | `checkConnection()`      | `connectionCheckMsg`                              |
+| Init project     | `initProject()`          | `initDoneMsg`                                     |
 
 ### Channel-Based Agent Progress
 
-The agent loop uses a channel to emit progress events (tool use, final result, error) so the UI can update in real time without blocking:
+The agent loop uses a channel to emit progress events so the UI can update in real time without blocking:
 
 ```
 runAgentLoop() ──► goroutine ──► ch agentEvent
                                   │
-                                  ├── agentToolUseMsg (each tool call)
-                                  ├── agentDoneMsg (final answer)
-                                  └── agentErrMsg (on failure)
+                                  ├── agentToolUseMsg   (each tool call)
+                                  ├── agentConfirmMsg   (write_file / patch_file / run_command)
+                                  ├── agentDoneMsg      (final answer)
+                                  └── agentErrMsg       (on failure)
 
 listenForAgentEvent(ch) ──► returns next event as tea.Msg
 ```
+
+### Confirmation Handshake
+
+For destructive operations (`write_file`, `patch_file`, `run_command`), the agent goroutine blocks on a `chan bool` until the TUI responds:
+
+```
+Agent goroutine                      BubbleTea event loop
+───────────────────────              ────────────────────────────
+Sends agentConfirmMsg
+  with replyCh (chan bool, buf=1)
+Blocks on <-replyCh      ──────────► TUI enters stateConfirm
+                                     Renders confirmation prompt
+                                     User presses y/n
+                         ◄────────── Sends true/false on replyCh
+Unblocks, executes or skips
+Continues agent loop
+```
+
+When `autoAccept` is `true`, `requestConfirm()` is not called and the tool executes immediately.
 
 ## Component Hierarchy
 
@@ -82,20 +103,31 @@ listenForAgentEvent(ch) ──► returns next event as tea.Msg
 Model (tui/model.go)
 ├── inputModel          — Textarea for user input
 ├── viewportModel       — Scrollable message display
-├── statusBarModel      — Bottom status line
+├── statusBarModel      — Two-line bottom status bar
 ├── spinnerModel        — Loading indicator
 ├── completionState     — Autocomplete popup
 ├── modelPicker         — Model selection popup
+├── confirmPrompt       — Confirmation widget (edits and commands)
 └── promptHistory       — Up/down history navigation
 ```
 
 Each sub-component is a struct with its own `Update(msg) (Self, tea.Cmd)` and `View() string` methods, following BubbleTea conventions.
 
-## Application Modes
+## Application States
 
-| Mode      | Condition                         | Notes                          |
-|-----------|-----------------------------------|--------------------------------|
-| Cloud     | `DEEPSEEK_API_KEY` set            | Agent mode on by default       |
-| Local     | No API key or `--local` flag      | Agent mode not available       |
-| Streaming | `stateStreaming`                  | Input locked, chunks displayed |
-| Ready     | `stateReady`                      | Input focused                  |
+| State           | Description                                              |
+|-----------------|----------------------------------------------------------|
+| `stateReady`    | Input focused, waiting for user input                    |
+| `stateStreaming` | Active stream, agent loop, or long API call running     |
+| `stateConfirm`  | Agent paused, awaiting user confirmation for an action   |
+
+## Status Bar
+
+The status bar is two lines tall (`statusHeight = 2` in `resize()`):
+
+```
+ cloud │ deepseek-chat │ T:1234 │ AGENT │ Ctx:9%          /help
+ Agent: ON (Ctrl+A)   Auto-accept: OFF (/auto or Ctrl+A)   Enhance: OFF (Ctrl+E)
+```
+
+Line 1 shows active mode flags and context usage. Line 2 shows static key hints with current ON/OFF state for the three toggleable modes.

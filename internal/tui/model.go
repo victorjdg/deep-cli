@@ -20,6 +20,7 @@ type state int
 const (
 	stateReady state = iota
 	stateStreaming
+	stateConfirm
 )
 
 type Model struct {
@@ -41,10 +42,13 @@ type Model struct {
 
 	enhanceActive      bool   // prompt enhancement mode
 	agentActive        bool   // tool-calling agent mode
+	autoAccept         bool   // auto-accept file edits and commands without prompting
 	pendingFileContent string // file content waiting for enhance to complete
 	pendingMessage     string // original message waiting for enhance to complete
 
-	agentChan <-chan agentEvent // channel for agent loop progress
+	agentChan     <-chan agentEvent // channel for agent loop progress
+	confirmPrompt confirmPrompt
+	confirmReplyCh chan<- bool // write-only; held while stateConfirm is active
 
 	// Streaming state
 	streamBuf    *strings.Builder
@@ -240,6 +244,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		return m, nil
 
+	case agentConfirmMsg:
+		m.spinner.Stop()
+		switch msg.kind {
+		case confirmKindCommand:
+			m.confirmPrompt.OpenCommand(msg.title, m.width)
+		case confirmKindEdit:
+			m.confirmPrompt.OpenEdit(msg.title, msg.detail, m.width)
+		}
+		m.confirmReplyCh = msg.replyCh
+		m.state = stateConfirm
+		// Do not re-issue listenForAgentEvent — goroutine is blocked waiting for reply.
+		return m, nil
+
+	case initDoneMsg:
+		m.spinner.Stop()
+		if msg.err != nil {
+			m.viewport.AddError(fmt.Errorf("init failed: %w", msg.err))
+		} else {
+			m.session.AddTokens(msg.usage)
+			m.statusBar.SetTokens(m.session.Tokens.TotalTokens)
+			m.statusBar.SetContextPct(m.session.ContextPercentage())
+			output := "CONTEXT.md generated successfully."
+			if msg.summary != "" {
+				output += "\n\n" + msg.summary
+			}
+			m.viewport.AddSlashOutput(output)
+		}
+		m.state = stateReady
+		m.input.Focus()
+		return m, nil
+
 	case compactDoneMsg:
 		m.spinner.Stop()
 		if msg.err != nil {
@@ -295,6 +330,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
+	// Confirmation prompt intercepts all keys.
+	if m.state == stateConfirm {
+		switch key {
+		case "y", "Y":
+			m.confirmReplyCh <- true
+			m.confirmPrompt.Close()
+			m.confirmReplyCh = nil
+			m.state = stateStreaming
+			spinnerCmd := m.spinner.Start("Running command...")
+			return m, tea.Batch(spinnerCmd, listenForAgentEvent(m.agentChan))
+		case "n", "N", "escape", "ctrl+c":
+			m.confirmReplyCh <- false
+			m.confirmPrompt.Close()
+			m.confirmReplyCh = nil
+			m.state = stateStreaming
+			spinnerCmd := m.spinner.Start("Agent working...")
+			return m, tea.Batch(spinnerCmd, listenForAgentEvent(m.agentChan))
+		}
+		return m, nil
+	}
+
 	switch {
 	case key == "ctrl+d":
 		return m, tea.Quit
@@ -330,6 +386,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.viewport.AddSlashOutput("Prompt enhancement ON. Prompts will be improved before sending (uses extra tokens).")
 		} else {
 			m.viewport.AddSlashOutput("Prompt enhancement OFF.")
+		}
+		return m, nil
+
+	case key == "ctrl+a":
+		m.autoAccept = !m.autoAccept
+		m.statusBar.SetAutoAccept(m.autoAccept)
+		if m.autoAccept {
+			m.viewport.AddSlashOutput("Auto-accept ON. File edits and commands will execute without confirmation.")
+		} else {
+			m.viewport.AddSlashOutput("Auto-accept OFF. You will be asked before each file edit or command.")
 		}
 		return m, nil
 
@@ -527,6 +593,15 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 			return m, tea.Batch(spinnerCmd, compactConversation(m.client, m.session.Messages))
 		}
 
+		if result.initProject {
+			workDir, _ := os.Getwd()
+			m.viewport.AddSlashOutput("Analyzing project, this may take a moment...")
+			m.state = stateStreaming
+			m.input.Blur()
+			spinnerCmd := m.spinner.Start("Generating CONTEXT.md...")
+			return m, tea.Batch(spinnerCmd, initProject(m.client, workDir))
+		}
+
 		if result.toggleAgent {
 			if m.cfg.UseLocal {
 				m.viewport.AddSlashOutput("Agent mode is only available in cloud mode.")
@@ -549,6 +624,17 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 				m.viewport.AddSlashOutput("Prompt enhancement ON. Prompts will be improved before sending (uses extra tokens).")
 			} else {
 				m.viewport.AddSlashOutput("Prompt enhancement OFF.")
+			}
+			return m, nil
+		}
+
+		if result.toggleAutoAccept {
+			m.autoAccept = !m.autoAccept
+			m.statusBar.SetAutoAccept(m.autoAccept)
+			if m.autoAccept {
+				m.viewport.AddSlashOutput("Auto-accept ON. File edits and commands will execute without confirmation.")
+			} else {
+				m.viewport.AddSlashOutput("Auto-accept OFF. You will be asked before each file edit or command.")
 			}
 			return m, nil
 		}
@@ -589,7 +675,7 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 	if m.agentActive {
 		m.session.AddUser(prompt)
 		workDir, _ := os.Getwd()
-		ch, cmd := runAgentLoop(m.client, m.session.Messages, workDir)
+		ch, cmd := runAgentLoop(m.client, m.session.Messages, workDir, m.autoAccept)
 		m.agentChan = ch
 		spinnerCmd := m.spinner.Start("Agent thinking...")
 		return m, tea.Batch(spinnerCmd, cmd, listenForAgentEvent(ch))
@@ -618,7 +704,7 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) resize() {
-	statusHeight := 1
+	statusHeight := 2
 	inputHeight := 5 // textarea with border
 	// Reserve space for popup if active.
 	popupHeight := 0
@@ -643,9 +729,12 @@ func (m Model) View() string {
 	vpView := m.viewport.View()
 
 	var midSection string
-	if m.state == stateStreaming && m.spinner.active {
+	switch {
+	case m.state == stateConfirm:
+		midSection = m.confirmPrompt.View()
+	case m.state == stateStreaming && m.spinner.active:
 		midSection = m.spinner.View()
-	} else {
+	default:
 		midSection = m.input.View()
 	}
 
