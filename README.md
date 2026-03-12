@@ -1,14 +1,16 @@
 # Deep-CLI
 
-A terminal AI assistant powered by [DeepSeek](https://deepseek.com), written in Go. Supports both cloud mode (DeepSeek API) and local mode (Ollama), with a rich interactive TUI, agent mode with tool calling, and web search capabilities.
+A terminal AI assistant powered by [DeepSeek](https://deepseek.com), written in Go. Supports both cloud mode (DeepSeek API) and local mode (Ollama), with a rich interactive TUI, agent mode with tool calling, web search capabilities, and file editing with confirmation controls.
 
 ## Features
 
 - **Interactive TUI** with streaming responses and markdown rendering
-- **Agent mode** — the model can read files, list directories, and search the web
+- **Agent mode** — the model can read, write, and search files, run shell commands, and search the web
 - **Slash commands** for managing context, models, and settings
 - **Prompt enhancement** — automatically rewrites your prompt before sending
 - **Context compression** — summarize long conversations to free up token space
+- **Auto-accept mode** — approve all agent edits and commands automatically, or review each one individually
+- **Project init** — generate a `CONTEXT.md` file documenting your project with `/init`
 - **Dual backend** — DeepSeek cloud API or local Ollama models
 - **Autocomplete** for commands, file paths, and search engines
 - **Prompt history** with up/down navigation
@@ -26,7 +28,7 @@ A terminal AI assistant powered by [DeepSeek](https://deepseek.com), written in 
 
 ```bash
 git clone https://github.com/victorjdg/deep-cli
-cd deep-cli/go
+cd deep-cli
 make build
 ```
 
@@ -117,6 +119,8 @@ Type any command starting with `/` in the interactive REPL:
 | `/compact`            | Summarize and compress the conversation (AI-assisted)        |
 | `/enhance`            | Toggle prompt enhancement mode                               |
 | `/agent`              | Toggle agent mode (tool calling) — cloud mode only           |
+| `/auto`               | Toggle auto-accept mode for file edits and commands          |
+| `/init`               | Analyze the current project and generate a `CONTEXT.md` file |
 | `/search [engine]`    | Show or change the active web search engine                  |
 | `/models`             | List all available models from the API                       |
 | `/model [name]`       | Show current model or switch to a new one                    |
@@ -140,6 +144,7 @@ Review these /file src/api.go /file src/types.go and suggest improvements
 |-----------|---------------------------------------------|
 | `Enter`   | Submit message                              |
 | `Ctrl+E`  | Toggle prompt enhancement                   |
+| `Ctrl+A`  | Toggle auto-accept mode                     |
 | `Ctrl+L`  | Clear the screen                            |
 | `Ctrl+C`  | Cancel ongoing stream / Quit                |
 | `Ctrl+D`  | Quit                                        |
@@ -151,20 +156,53 @@ Review these /file src/api.go /file src/types.go and suggest improvements
 
 ## Agent Mode
 
-In cloud mode, the model can autonomously use tools to answer questions that require exploring your filesystem or searching the web. Agent mode is **enabled by default** in cloud mode and can be toggled with `/agent`.
+In cloud mode, the model can autonomously use tools to answer questions, explore your codebase, edit files, and run commands. Agent mode is **enabled by default** in cloud mode and can be toggled with `/agent`.
 
 ### Available tools
 
-| Tool          | Description                                                       |
-|---------------|-------------------------------------------------------------------|
-| `list_files`  | List files and directories at a given path (max 200 entries)      |
-| `read_file`   | Read the contents of a text file (max 512 KB)                     |
-| `write_file`  | Write text content to a file, creating it or overwriting it (max 4 MB) |
-| `web_search`  | Search the web using the configured search engine (max 5 results) |
+| Tool                  | Description                                                            |
+|-----------------------|------------------------------------------------------------------------|
+| `list_files`          | List files and directories at a given path (max 200 entries)           |
+| `read_file`           | Read the contents of a text file (max 512 KB)                          |
+| `read_multiple_files` | Read several files in a single call                                    |
+| `write_file`          | Write text content to a file, creating it or overwriting it (max 4 MB) |
+| `patch_file`          | Apply a surgical edit by replacing an exact string in a file           |
+| `search_files`        | Search for a regex pattern across files, returning file:line matches   |
+| `glob`                | Find files matching a glob pattern (e.g. `**/*.go`)                    |
+| `get_file_info`       | Get metadata for a file: size, modification time, permissions, MIME    |
+| `web_search`          | Search the web using the configured search engine (max 5 results)      |
+| `run_command`         | Run a shell command and return its output (requires confirmation)      |
 
 The agent runs in a loop of up to 10 iterations: each iteration calls the LLM, executes any requested tools, feeds results back, and repeats until the model produces a final response with no tool calls.
 
-> **Security:** File tools are sandboxed to the current working directory. Path traversal attempts are blocked.
+> **Security:** File tools are sandboxed to the current working directory. Path traversal attempts are blocked. `run_command` always asks for confirmation unless auto-accept mode is active.
+
+### Auto-accept mode
+
+By default, any tool that modifies the filesystem (`write_file`, `patch_file`) or runs a command (`run_command`) will pause and ask for confirmation before executing. Toggle this behaviour with `/auto` or `Ctrl+A`:
+
+- **Auto-accept OFF** (default) — a confirmation prompt appears for every edit or command, showing the file path or command before you approve
+- **Auto-accept ON** — all actions execute immediately without prompting, similar to Claude Code's auto-accept edits mode
+
+The current state is always visible in the status bar (`│ AUTO` indicator).
+
+---
+
+## Project Init (`/init`)
+
+The `/init` command analyzes your current project and generates a `CONTEXT.md` file documenting its architecture, tech stack, key directories, and build commands.
+
+```
+/init
+```
+
+It works by:
+1. Building a directory tree of the project (up to 4 levels deep)
+2. Reading key files from the root (`README.md`, `go.mod`, `package.json`, `Makefile`, `Dockerfile`, etc.)
+3. Sending everything to the model in a single request
+4. Writing the result to `CONTEXT.md` and displaying a summary in the terminal
+
+The generated file can be loaded into context with `/file CONTEXT.md` at the start of future sessions to give the model immediate project awareness.
 
 ---
 
@@ -193,8 +231,8 @@ The engine selection is **not persisted** between sessions; configure your prefe
 
 ### DeepSeek cloud (`--api-key` required)
 
-| Model               | Context    | Use case                                |
-|---------------------|------------|-----------------------------------------|
+| Model               | Context     | Use case                                |
+|---------------------|-------------|-----------------------------------------|
 | `deepseek-chat`     | 128K tokens | General purpose, coding, analysis       |
 | `deepseek-reasoner` | 128K tokens | Complex reasoning and problem solving   |
 
@@ -215,7 +253,6 @@ Run `deepseek setup` to pull a model automatically, or use `/models` to list ava
 ## Project Structure
 
 ```
-go/
 ├── main.go                   # Entry point
 ├── Makefile                  # Build targets
 ├── .env.example              # Environment variable template
@@ -227,7 +264,7 @@ go/
     ├── api/                  # API clients (DeepSeek, Ollama)
     ├── config/               # Configuration loading
     ├── markdown/             # Terminal markdown rendering
-    ├── search/               # Web search engines
+    ├── search/               # Web search engines (Tavily, Brave, SearXNG)
     ├── session/              # Conversation and token management
     ├── tools/                # Agent tool definitions and execution
     └── tui/                  # BubbleTea TUI components

@@ -59,9 +59,41 @@ Also available as `Ctrl+E`. Status bar shows `ENHANCE` in yellow when active.
 
 ### `/agent`
 
-Toggles **agent mode** (tool calling). Only available in cloud mode. When active, the model can use `list_files`, `read_file`, and `web_search` tools.
+Toggles **agent mode** (tool calling). Only available in cloud mode. When active, the model can use all available tools to autonomously complete tasks.
 
 Status bar shows `AGENT` in green when active. Enabled by default in cloud mode.
+
+See [agent-mode.md](./agent-mode.md) for the full tool reference.
+
+---
+
+### `/auto`
+
+Toggles **auto-accept mode**. Controls whether the agent asks for confirmation before writing files or running commands.
+
+- **OFF** (default) — a confirmation prompt appears for `write_file`, `patch_file`, and `run_command`
+- **ON** — all agent actions execute immediately without prompting
+
+Also available as `Ctrl+A`. Status bar shows `AUTO` in amber when active.
+
+---
+
+### `/init`
+
+Analyzes the current project directory and generates a `CONTEXT.md` file documenting its architecture, tech stack, key directories, and build commands.
+
+```
+/init
+```
+
+How it works:
+1. Builds a directory tree (up to 4 levels deep, skipping `node_modules`, `.git`, `vendor`, etc.)
+2. Reads key files from the root: `README.md`, `go.mod`, `package.json`, `Makefile`, `Dockerfile`, `.env.example`, and others
+3. Sends everything to the model in a single API call (3-minute timeout)
+4. Writes the result to `CONTEXT.md` in the current directory
+5. Displays a bullet-point summary of findings in the terminal
+
+The generated `CONTEXT.md` can be loaded into context with `/file CONTEXT.md` at the start of future sessions.
 
 ---
 

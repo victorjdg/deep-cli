@@ -51,7 +51,9 @@ func (d *DeepSeekClient) Complete(ctx context.Context, messages []Message) (stri
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+d.apiKey)
 
-	resp, err := d.client.Do(req)
+	// Use a client without its own timeout so the caller's context deadline is respected.
+	noTimeoutClient := &http.Client{}
+	resp, err := noTimeoutClient.Do(req)
 	if err != nil {
 		return "", TokenUsage{}, fmt.Errorf("failed to connect to DeepSeek API: %w", err)
 	}

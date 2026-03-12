@@ -20,15 +20,17 @@ func SetSlashSearchManager(m *search.Manager) {
 }
 
 type slashResult struct {
-	output        string
-	changeModel   string // non-empty to change model
-	clear         bool
-	quit          bool
-	listModels    bool   // triggers async model listing
-	compact       bool   // triggers conversation compaction
-	toggleEnhance bool   // toggles prompt enhancement mode
-	toggleAgent   bool   // toggles agent mode (tool calling)
-	fileContent   string // content to inject into session as user context
+	output           string
+	changeModel      string // non-empty to change model
+	clear            bool
+	quit             bool
+	listModels       bool   // triggers async model listing
+	compact          bool   // triggers conversation compaction
+	toggleEnhance    bool   // toggles prompt enhancement mode
+	toggleAgent      bool   // toggles agent mode (tool calling)
+	toggleAutoAccept bool   // toggles auto-accept mode
+	initProject      bool   // triggers CONTEXT.md generation
+	fileContent      string // content to inject into session as user context
 }
 
 type costInfo struct {
@@ -61,6 +63,8 @@ func handleSlashCommand(input string, currentModel string, cost costInfo) slashR
   /compact           Summarize and compact conversation context
   /enhance           Toggle prompt enhancement (Ctrl+E)
   /agent             Toggle agent mode (tool calling)
+  /auto              Toggle auto-accept (skip confirmation for file edits and commands)
+  /init              Generate a CONTEXT.md file for the current project
   /search [engine]   Show or change search engine (tavily, brave, searxng)
   /models            List available models from the API
   /model [name]      Show or change the current model
@@ -70,6 +74,7 @@ func handleSlashCommand(input string, currentModel string, cost costInfo) slashR
 Shortcuts:
   Enter          Submit message
   Ctrl+E         Toggle prompt enhancement
+  Ctrl+A         Toggle auto-accept
   Ctrl+C         Cancel streaming / Quit
   Ctrl+D         Quit
   Ctrl+L         Clear screen`,
@@ -131,6 +136,12 @@ Shortcuts:
 
 	case "/agent":
 		return slashResult{toggleAgent: true}
+
+	case "/auto":
+		return slashResult{toggleAutoAccept: true}
+
+	case "/init":
+		return slashResult{initProject: true}
 
 	case "/exit":
 		return slashResult{quit: true}
@@ -211,7 +222,7 @@ func looksLikePath(s string) bool {
 		return true
 	}
 	// Known slash commands.
-	cmds := []string{"/help", "/clear", "/compact", "/enhance", "/agent", "/search", "/models", "/model", "/cost", "/exit", "/file"}
+	cmds := []string{"/help", "/clear", "/compact", "/enhance", "/agent", "/auto", "/init", "/search", "/models", "/model", "/cost", "/exit", "/file"}
 	lower := strings.ToLower(s)
 	for _, c := range cmds {
 		if lower == c {
