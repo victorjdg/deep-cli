@@ -1,21 +1,22 @@
 # Deep-CLI
 
-A terminal AI assistant powered by [DeepSeek](https://deepseek.com), written in Go. Supports both cloud mode (DeepSeek API) and local mode (Ollama), with a rich interactive TUI, agent mode with tool calling, web search capabilities, and file editing with confirmation controls.
+A terminal AI assistant powered by [DeepSeek](https://deepseek.com), written in Go. Requires a DeepSeek API key. Features a rich interactive TUI, agent mode with tool calling, web search capabilities, and file editing with confirmation controls.
 
 ![Deep-CLI screenshot](assets/screenshot.png)
 
 ## Features
 
 - **Interactive TUI** with streaming responses and markdown rendering
-- **Agent mode** — the model can read, write, and search files, run shell commands, and search the web
+- **Agent mode** — the model can read, write, and search files, run shell commands, and search the web; multiple tool calls execute in parallel automatically, and complex tasks can be delegated to parallel subagents
 - **Slash commands** for managing context, models, and settings
 - **Prompt enhancement** — automatically rewrites your prompt before sending
 - **Context compression** — summarize long conversations to free up token space
 - **Auto-accept mode** — approve all agent edits and commands automatically, or review each one individually
 - **Project init** — generate a `CONTEXT.md` file documenting your project with `/init`
-- **Dual backend** — DeepSeek cloud API or local Ollama models
+- **Conversation export** — save any session to a markdown file with `/save`
+- **Multiline input** — `Shift+Enter` inserts a newline; `Enter` submits
+- **Prompt history** — up/down navigation, persisted across sessions (`~/.local/share/deep-cli/history`)
 - **Autocomplete** for commands, file paths, and search engines
-- **Prompt history** with up/down navigation
 
 ---
 
@@ -24,7 +25,7 @@ A terminal AI assistant powered by [DeepSeek](https://deepseek.com), written in 
 ### Prerequisites
 
 - Go 1.22 or later
-- A [DeepSeek API key](https://platform.deepseek.com) (cloud mode) **or** [Ollama](https://ollama.com) installed (local mode)
+- A [DeepSeek API key](https://platform.deepseek.com)
 
 ### Build from source
 
@@ -62,14 +63,13 @@ cp .env.example .env
 
 | Environment Variable     | Description                                       | Default                        |
 |--------------------------|---------------------------------------------------|--------------------------------|
-| `DEEPSEEK_API_KEY`       | DeepSeek API key (required for cloud mode)        | —                              |
-| `DEEPSEEK_MODEL`         | Model to use                                      | `deepseek-chat` / `deepseek-coder:6.7b` |
-| `DEEPSEEK_USE_LOCAL`     | Set to `true` to force local Ollama mode          | `true` if no API key is set    |
-| `OLLAMA_HOST`            | Ollama server URL                                 | `http://localhost:11434`       |
+| `DEEPSEEK_API_KEY`       | DeepSeek API key (required)                       | —                              |
+| `DEEPSEEK_MODEL`         | Model to use                                      | `deepseek-chat`                |
 | `DEEPSEEK_MAX_CONTEXT`   | Max context window size in tokens                 | Auto-detected from model       |
 | `TAVILY_API_KEY`         | API key for Tavily web search                     | —                              |
 | `BRAVE_SEARCH_API_KEY`   | API key for Brave Search                          | —                              |
 | `SEARXNG_HOST`           | Base URL for SearXNG instance                     | —                              |
+| `DEEPSEEK_MAX_SUBAGENTS` | Max parallel subagents for `delegate_task`        | `5`                            |
 
 Configuration priority (highest to lowest): **CLI flags → environment variables → defaults**
 
@@ -89,23 +89,14 @@ Flags:
 |-------------------|-------|--------------------------------------|
 | `--api-key`       | `-k`  | DeepSeek API key                     |
 | `--model`         | `-m`  | Model name to use                    |
-| `--local`         | `-l`  | Force local Ollama mode              |
-| `--ollama-host`   |       | Ollama server URL                    |
 | `--max-context`   |       | Context window size in tokens        |
+| `--max-subagents` |       | Max parallel subagents (default: 5)  |
 
 ### Single-prompt mode
 
 ```bash
 deepseek chat "Explain what a B-tree is"
 ```
-
-### Ollama setup helper
-
-```bash
-deepseek setup
-```
-
-Checks your Ollama installation, starts the service if needed, and downloads a model.
 
 ---
 
@@ -120,10 +111,11 @@ Type any command starting with `/` in the interactive REPL:
 | `/clear`              | Clear conversation history                                   |
 | `/compact`            | Summarize and compress the conversation (AI-assisted)        |
 | `/enhance`            | Toggle prompt enhancement mode                               |
-| `/agent`              | Toggle agent mode (tool calling) — cloud mode only           |
+| `/agent`              | Toggle agent mode (tool calling)                             |
 | `/auto`               | Toggle auto-accept mode for file edits and commands          |
 | `/init`               | Analyze the current project and generate a `CONTEXT.md` file |
 | `/undo`               | Revert the last file edit made by the agent (stackable)      |
+| `/save [path]`        | Export the conversation to a markdown file                   |
 | `/search [engine]`    | Show or change the active web search engine                  |
 | `/models`             | List all available models from the API                       |
 | `/model [name]`       | Show current model or switch to a new one                    |
@@ -143,24 +135,25 @@ Review these /file src/api.go /file src/types.go and suggest improvements
 
 ## Keyboard Shortcuts
 
-| Shortcut  | Action                                      |
-|-----------|---------------------------------------------|
-| `Enter`   | Submit message                              |
-| `Ctrl+E`  | Toggle prompt enhancement                   |
-| `Ctrl+A`  | Toggle auto-accept mode                     |
-| `Ctrl+T`  | Toggle agent trace panel                    |
-| `Ctrl+L`  | Clear the screen                            |
-| `Ctrl+C`  | Cancel ongoing stream / Quit                |
-| `Ctrl+D`  | Quit                                        |
-| `Tab`     | Autocomplete command, file path, or engine  |
-| `↑ / ↓`  | Navigate prompt history                     |
-| `Escape`  | Close autocomplete or model picker          |
+| Shortcut      | Action                                      |
+|---------------|---------------------------------------------|
+| `Enter`       | Submit message                              |
+| `Shift+Enter` | Insert newline (multiline input)            |
+| `Ctrl+E`      | Toggle prompt enhancement                   |
+| `Ctrl+A`      | Toggle auto-accept mode                     |
+| `Ctrl+T`      | Toggle agent trace panel                    |
+| `Ctrl+L`      | Clear the screen                            |
+| `Ctrl+C`      | Cancel ongoing stream / Quit                |
+| `Ctrl+D`      | Quit                                        |
+| `Tab`         | Autocomplete command, file path, or engine  |
+| `↑ / ↓`      | Navigate prompt history                     |
+| `Escape`      | Close autocomplete or model picker          |
 
 ---
 
 ## Agent Mode
 
-In cloud mode, the model can autonomously use tools to answer questions, explore your codebase, edit files, and run commands. Agent mode is **enabled by default** in cloud mode and can be toggled with `/agent`.
+The model can autonomously use tools to answer questions, explore your codebase, edit files, and run commands. Agent mode is **enabled by default** and can be toggled with `/agent`.
 
 ### Available tools
 
@@ -177,8 +170,11 @@ In cloud mode, the model can autonomously use tools to answer questions, explore
 | `web_search`          | Search the web using the configured search engine (max 5 results)      |
 | `fetch_url`           | Fetch the full text content of a web page (max 8 000 chars)            |
 | `run_command`         | Run a shell command and return its output (requires confirmation)      |
+| `delegate_task`       | Delegate a self-contained task to a subagent with its own tool loop    |
 
 The agent runs in a loop of up to 10 iterations: each iteration calls the LLM, executes any requested tools, feeds results back, and repeats until the model produces a final response with no tool calls.
+
+**Tool calls within a single iteration execute in parallel.** Read-only tools (`list_files`, `read_file`, `glob`, `web_search`, etc.) always run concurrently. Destructive tools (`write_file`, `patch_file`, `run_command`) also run in parallel when auto-accept is ON; otherwise they run sequentially after the parallel read phase, one confirmation at a time. Results are always fed back to the model in the original order.
 
 > **Security:** File tools are sandboxed to the current working directory. Path traversal attempts are blocked. `run_command` always asks for confirmation unless auto-accept mode is active.
 
@@ -191,7 +187,7 @@ Press `Ctrl+T` at any time to open the trace panel, which shows every tool call 
 By default, any tool that modifies the filesystem (`write_file`, `patch_file`) or runs a command (`run_command`) will pause and ask for confirmation before executing. Toggle this behaviour with `/auto` or `Ctrl+A`:
 
 - **Auto-accept OFF** (default) — a confirmation prompt appears for every edit or command, showing the file path or command before you approve
-- **Auto-accept ON** — all actions execute immediately without prompting, similar to Claude Code's auto-accept edits mode
+- **Auto-accept ON** — all actions execute immediately without prompting
 
 The current state is always visible in the status bar (`│ AUTO` indicator).
 
@@ -238,24 +234,12 @@ The engine selection is **not persisted** between sessions; configure your prefe
 
 ## Supported Models
 
-### DeepSeek cloud (`--api-key` required)
-
 | Model               | Context     | Use case                                |
 |---------------------|-------------|-----------------------------------------|
 | `deepseek-chat`     | 128K tokens | General purpose, coding, analysis       |
 | `deepseek-reasoner` | 128K tokens | Complex reasoning and problem solving   |
 
-### Local via Ollama
-
-Any model available in your Ollama installation. Examples:
-
-```
-deepseek-coder:6.7b
-deepseek-coder:33b
-deepseek-r1:7b
-```
-
-Run `deepseek setup` to pull a model automatically, or use `/models` to list available ones.
+Use `/models` to list all models available in your account, or `/model <name>` to switch.
 
 ---
 
@@ -267,10 +251,9 @@ Run `deepseek setup` to pull a model automatically, or use `/models` to list ava
 ├── .env.example              # Environment variable template
 ├── cmd/
 │   ├── root.go               # Interactive REPL command
-│   ├── chat.go               # Single-prompt command
-│   └── setup.go              # Ollama setup command
+│   └── chat.go               # Single-prompt command
 └── internal/
-    ├── api/                  # API clients (DeepSeek, Ollama)
+    ├── api/                  # DeepSeek API client
     ├── config/               # Configuration loading
     ├── markdown/             # Terminal markdown rendering
     ├── search/               # Web search engines (Tavily, Brave, SearXNG)

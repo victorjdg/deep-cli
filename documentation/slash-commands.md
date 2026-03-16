@@ -59,9 +59,9 @@ Also available as `Ctrl+E`. Status bar shows `ENHANCE` in yellow when active.
 
 ### `/agent`
 
-Toggles **agent mode** (tool calling). Only available in cloud mode. When active, the model can use all available tools to autonomously complete tasks.
+Toggles **agent mode** (tool calling). When active, the model can use all available tools to autonomously complete tasks.
 
-Status bar shows `AGENT` in green when active. Enabled by default in cloud mode.
+Status bar shows `AGENT` in green when active. Enabled by default.
 
 See [agent-mode.md](./agent-mode.md) for the full tool reference.
 
@@ -111,6 +111,24 @@ Reverts the last file edit made by the agent (`write_file` or `patch_file`), one
 - If the agent overwrote an existing file, `/undo` restores its previous content
 - `run_command` edits are not tracked (shell commands are not reversible)
 - Reports the path of the restored file: `Undo: restored internal/tools/tools.go`
+
+---
+
+### `/save [path]`
+
+Exports the current conversation to a markdown file.
+
+```
+/save                          → saves to conversation_2026-03-16_10-30-00.md in the current directory
+/save ~/notes/chat.md          → saves to a specific path
+/save output/session.md        → saves to a relative path
+```
+
+- Skips the system prompt — only user and assistant messages are exported
+- Each message is wrapped in a `## User` or `## Assistant` heading
+- The file header includes a timestamp
+- If the directory does not exist, it is created automatically
+- Reports the full path of the saved file on success
 
 ---
 
@@ -178,3 +196,9 @@ The autocomplete popup appears when:
 - You type `/search ` — shows available search engines
 
 Navigate with `↑`/`↓` or `Tab`, confirm with `Enter`, dismiss with `Escape`.
+
+## Multiline Input
+
+Press `Shift+Enter` to insert a newline in the input without submitting. Press `Enter` to submit as usual.
+
+The textarea grows up to 12 lines before scrolling internally. This is useful for pasting code snippets or writing structured prompts.

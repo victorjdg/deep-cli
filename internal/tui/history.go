@@ -1,21 +1,71 @@
 package tui
 
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
+
 // MaxHistorySize is the maximum number of prompts to keep in history.
-var MaxHistorySize = 20
+var MaxHistorySize = 500
 
 type promptHistory struct {
-	entries []string
-	cursor  int    // -1 means "not browsing", 0..len-1 indexes from newest
-	draft   string // saves the in-progress input when user starts browsing
+	entries  []string
+	cursor   int    // -1 means "not browsing", 0..len-1 indexes from newest
+	draft    string // saves the in-progress input when user starts browsing
+	filePath string
+}
+
+// historyFilePath returns ~/.local/share/deep-cli/history.
+func historyFilePath() string {
+	base, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(base, ".local", "share", "deep-cli", "history")
 }
 
 func newPromptHistory() *promptHistory {
-	return &promptHistory{
-		cursor: -1,
+	h := &promptHistory{
+		cursor:   -1,
+		filePath: historyFilePath(),
+	}
+	h.load()
+	return h
+}
+
+// load reads persisted history from disk (one entry per line, oldest first).
+func (h *promptHistory) load() {
+	if h.filePath == "" {
+		return
+	}
+	data, err := os.ReadFile(h.filePath)
+	if err != nil {
+		return // file doesn't exist yet — that's fine
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	for _, line := range lines {
+		if line != "" {
+			h.entries = append(h.entries, line)
+		}
+	}
+	if len(h.entries) > MaxHistorySize {
+		h.entries = h.entries[len(h.entries)-MaxHistorySize:]
 	}
 }
 
-// Add stores a new prompt at the end of history.
+// save writes the current history to disk.
+func (h *promptHistory) save() {
+	if h.filePath == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(h.filePath), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(h.filePath, []byte(strings.Join(h.entries, "\n")+"\n"), 0o600)
+}
+
+// Add stores a new prompt at the end of history and persists it to disk.
 func (h *promptHistory) Add(prompt string) {
 	if prompt == "" {
 		return
@@ -29,6 +79,7 @@ func (h *promptHistory) Add(prompt string) {
 		h.entries = h.entries[len(h.entries)-MaxHistorySize:]
 	}
 	h.Reset()
+	h.save()
 }
 
 // Reset exits browsing mode.

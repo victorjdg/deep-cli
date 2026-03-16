@@ -48,12 +48,13 @@ type Model struct {
 
 ## Input (`input.go`)
 
-A `charmbracelet/bubbles/textarea` with a rounded border. Single-line height by default, supporting multi-line input.
+A `charmbracelet/bubbles/textarea` with a rounded border. Starts at 3 lines tall and grows up to 12 lines as content is added. `Shift+Enter` inserts a newline; `Enter` submits.
 
 - `Focus()` / `Blur()` control keyboard capture
 - `Value()` returns current text
 - `Reset()` clears the textarea
 - `SetWidth(n)` adjusts to terminal width
+- `MaxHeight = 12` — textarea scrolls internally beyond 12 lines
 
 ## Viewport (`viewport.go`)
 
@@ -189,7 +190,12 @@ Popup shown after `/models` loads the model list. Allows selecting a model with 
 
 ## Prompt History (`history.go`)
 
-Stores the last 20 submitted prompts (no consecutive duplicates). Navigate with `↑`/`↓` while the input is empty or matches a history entry.
+Stores the last 500 submitted prompts (no consecutive duplicates). Persisted to `~/.local/share/deep-cli/history` between sessions. Navigate with `↑`/`↓`.
+
+- Loaded from disk on startup
+- Written to disk on every `Add()` call
+- Directory is created automatically on first save
+- File is written with `0600` permissions (user-only)
 
 ## Commands (`commands.go`)
 
@@ -237,12 +243,13 @@ Central style definitions using `lipgloss`. Colors are referenced by terminal co
 
 Documents keybindings used throughout the app:
 
-| Key       | Action                    |
-|-----------|---------------------------|
-| `Enter`   | Submit message            |
-| `Ctrl+D`  | Quit                      |
-| `Ctrl+C`  | Cancel stream / Quit      |
-| `Ctrl+L`  | Clear screen              |
-| `Ctrl+E`  | Toggle prompt enhancement |
-| `Ctrl+A`  | Toggle auto-accept        |
-| `Ctrl+T`  | Toggle agent trace panel  |
+| Key           | Action                    |
+|---------------|---------------------------|
+| `Enter`       | Submit message            |
+| `Shift+Enter` | Insert newline            |
+| `Ctrl+D`      | Quit                      |
+| `Ctrl+C`      | Cancel stream / Quit      |
+| `Ctrl+L`      | Clear screen              |
+| `Ctrl+E`      | Toggle prompt enhancement |
+| `Ctrl+A`      | Toggle auto-accept        |
+| `Ctrl+T`      | Toggle agent trace panel  |

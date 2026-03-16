@@ -9,6 +9,6 @@ Detailed technical reference for DeepSeek CLI internals.
 | [slash-commands.md](./slash-commands.md)        | All slash commands with behavior details                         |
 | [agent-mode.md](./agent-mode.md)                | Tool calling loop, all tools, confirmation flow, auto-accept     |
 | [web-search.md](./web-search.md)                | Search engines, setup, engine switching                          |
-| [api-clients.md](./api-clients.md)              | DeepSeek and Ollama client implementations                       |
+| [api-clients.md](./api-clients.md)              | DeepSeek API client implementation                               |
 | [session-management.md](./session-management.md)| Conversation history, token tracking, compaction                 |
 | [tui-components.md](./tui-components.md)        | All UI components, confirm prompt, init logic, keymap            |

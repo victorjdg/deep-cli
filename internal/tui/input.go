@@ -13,10 +13,11 @@ type inputModel struct {
 
 func newInputModel() inputModel {
 	ta := textarea.New()
-	ta.Placeholder = "Type your message... (Enter to send, Ctrl+D to quit)"
+	ta.Placeholder = "Type your message... (Enter to send, Shift+Enter for newline)"
 	ta.Focus()
 	ta.CharLimit = 0
 	ta.SetHeight(3)
+	ta.MaxHeight = 12
 	ta.ShowLineNumbers = false
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	ta.FocusedStyle.Base = lipgloss.NewStyle().

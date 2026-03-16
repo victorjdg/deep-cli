@@ -2,9 +2,9 @@
 
 ## Overview
 
-Agent mode enables the LLM to autonomously use tools to complete tasks that require reading files, exploring directories, editing code, running commands, or searching the web. It is only available in **cloud mode** (DeepSeek API).
+Agent mode enables the LLM to autonomously use tools to complete tasks that require reading files, exploring directories, editing code, running commands, or searching the web.
 
-Agent mode is **enabled by default** when using cloud mode. Toggle it with `/agent`.
+Agent mode is **enabled by default**. Toggle it with `/agent`.
 
 ## How It Works
 
@@ -20,11 +20,14 @@ LLM called with tools definition
   │
   └── Tool calls returned
         │
-        ├── For write_file / patch_file / run_command:
-        │     └── Auto-accept OFF? → Show confirmation prompt → Wait for y/n
+        ├── Phase A — parallel execution
+        │     ├── Read-only tools (list_files, read_file, glob, …) → run concurrently
+        │     └── Auto-accept ON? → write_file / patch_file / run_command also parallel
         │
-        ├── Execute each tool locally
-        ├── Append tool results to message history
+        ├── Phase B — sequential execution (auto-accept OFF only)
+        │     └── write_file / patch_file / run_command → confirmation prompt → wait y/n
+        │
+        ├── Phase C — append all results in original tool call order
         └── Call LLM again with results (loop, max 10 iterations)
 ```
 
@@ -39,12 +42,13 @@ Each tool execution is shown in the UI as:
 The spinner updates at each phase to indicate what is happening:
 
 ```
-⠋ Agent thinking...        — model processing the prompt
-⠋ Reading file...          — read_file executing
-⠋ Searching the web...     — web_search executing
-⠋ Fetching page content... — fetch_url executing
-⠋ Running command...       — run_command executing
-⠋ Processing results...    — model processing tool results
+⠋ Agent thinking...                      — model processing the prompt
+⠋ Agent working (3 tools in parallel)... — multiple tools executing concurrently
+⠋ Reading file...                        — single read_file executing
+⠋ Searching the web...                   — web_search executing
+⠋ Fetching page content...               — fetch_url executing
+⠋ Running command...                     — run_command executing
+⠋ Processing results...                  — model processing tool results
 ```
 
 ## Available Tools
@@ -191,6 +195,25 @@ Searches the web using the currently configured search engine.
 
 ---
 
+### `delegate_task`
+
+Delegates a self-contained analysis task to a subagent that runs independently with its own tool loop and API call.
+
+```json
+{
+  "task": "Analyze internal/tools/tools.go and summarize its public API surface and any notable patterns",
+  "context": "(optional) pre-loaded file content or additional background"
+}
+```
+
+- The subagent has access to all read-only tools (`list_files`, `read_file`, `glob`, `search_files`, `get_file_info`, `web_search`, `fetch_url`)
+- **Subagents cannot write files, run commands, or spawn further subagents** — preventing runaway delegation chains
+- Multiple `delegate_task` calls in the same iteration execute in parallel (capped by `--max-subagents`, default 5)
+- Progress is shown in the viewport: `tool: delegate_task(...) [subagent]`
+- Use when tasks are large, independent, and would benefit from parallel processing (e.g. analyzing 5 modules simultaneously)
+
+---
+
 ### `fetch_url`
 
 Fetches the full text content of a web page. Designed to be used after `web_search` to read the complete content of relevant URLs.
@@ -290,9 +313,55 @@ Press `Ctrl+T` at any time to open the agent trace panel, which shows all tool c
 
 Entries accumulate in the background even when the panel is closed. See [tui-components.md](./tui-components.md) for the full widget description.
 
+## Subagents
+
+When the model calls `delegate_task`, the agent loop spawns an independent subagent: a separate goroutine that runs its own `CompleteWithTools` loop (up to 10 iterations) with its own message history and tool access.
+
+**Subagent concurrency** is controlled by a semaphore:
+
+| Setting | Default | Override |
+|---------|---------|---------|
+| `--max-subagents N` flag | 5 | CLI flag |
+| `DEEPSEEK_MAX_SUBAGENTS` env var | 5 | Environment variable |
+
+If the model issues 8 `delegate_task` calls at once and the limit is 5, the first 5 start immediately and the remaining 3 wait until a slot frees up.
+
+**Subagent constraints:**
+- Read-only tools only — `write_file`, `patch_file`, `run_command` are blocked
+- Cannot spawn further subagents (`delegate_task` is removed from their tool list)
+- Each subagent is a separate API call — it increases token usage proportionally
+
+**When the model should use subagents:**
+- Analyzing multiple large files or modules independently
+- Parallel research across different topics
+- Any set of tasks where the subtasks don't depend on each other's results
+
+**When not to use subagents:**
+- Simple file reads (use `read_file` or `read_multiple_files` directly — they're local and instant)
+- Tasks that must be done in sequence
+- Any task requiring file writes or command execution
+
+## Parallel Tool Execution
+
+When the model returns multiple tool calls in a single response, the agent executes them in parallel rather than sequentially.
+
+**Read-only tools always run in parallel:**
+
+`list_files`, `read_file`, `read_multiple_files`, `search_files`, `glob`, `get_file_info`, `web_search`, `fetch_url`
+
+**Destructive tools (`write_file`, `patch_file`, `run_command`) depend on auto-accept:**
+
+| Mode | Behaviour |
+|------|-----------|
+| Auto-accept OFF (default) | Read-only tools run in parallel first; then destructive tools run one at a time with a confirmation prompt each |
+| Auto-accept ON (`/auto`) | All tools run fully in parallel — no confirmation, no sequential blocking |
+
+**Result ordering is always preserved.** Tool results are appended to the conversation in the original order returned by the model, as required by the API.
+
+**Tool failure isolation.** If one parallel tool fails, the others are unaffected. The failed tool is disabled for the rest of the session (same as sequential behaviour).
+
 ## Limitations
 
-- Not available in local (Ollama) mode
 - Maximum 10 iterations per agent run to prevent infinite loops
 - `web_search` requires an external API key or a running SearXNG instance
 - `run_command` uses a 30-second timeout; long-running processes will be killed

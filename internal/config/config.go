@@ -16,6 +16,7 @@ type Config struct {
 	OllamaHost       string
 	APIURL           string
 	MaxContextTokens int
+	MaxSubagents     int
 }
 
 var defaultContextSizes = map[string]int{
@@ -106,6 +107,18 @@ func Load() (*Config, error) {
 		maxContext = lookupContextSize(model)
 	}
 
+	maxSubagents := v.GetInt("max-subagents")
+	if maxSubagents == 0 {
+		if envMax := os.Getenv("DEEPSEEK_MAX_SUBAGENTS"); envMax != "" {
+			if n, err := strconv.Atoi(envMax); err == nil && n > 0 {
+				maxSubagents = n
+			}
+		}
+	}
+	if maxSubagents == 0 {
+		maxSubagents = 5
+	}
+
 	return &Config{
 		APIKey:           apiKey,
 		Model:            model,
@@ -113,5 +126,6 @@ func Load() (*Config, error) {
 		OllamaHost:       ollamaHost,
 		APIURL:           "https://api.deepseek.com/chat/completions",
 		MaxContextTokens: maxContext,
+		MaxSubagents:     maxSubagents,
 	}, nil
 }
