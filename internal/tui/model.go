@@ -241,6 +241,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.name == "write_file" || msg.name == "patch_file" {
 			label += "  [write]"
 		}
+		if msg.name == "delegate_task" {
+			label += "  [subagent]"
+		}
 		m.viewport.AddSlashOutput(label)
 		spinnerLabel := msg.spinnerLabel
 		if spinnerLabel == "" {
@@ -532,6 +535,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Normal mode keys.
 	switch key {
+	case "shift+enter":
+		if m.state == stateReady {
+			m.input.textarea.InsertString("\n")
+		}
+		return m, nil
+
 	case "enter":
 		if m.state != stateReady {
 			return m, nil
@@ -681,6 +690,16 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if result.saveConversation {
+			path, err := saveConversation(m.session.Messages, result.savePath)
+			if err != nil {
+				m.viewport.AddError(fmt.Errorf("save failed: %w", err))
+			} else {
+				m.viewport.AddSlashOutput(fmt.Sprintf("Conversation saved to %s", path))
+			}
+			return m, nil
+		}
+
 		if result.undo {
 			if len(m.undoStack) == 0 {
 				m.viewport.AddSlashOutput("Nothing to undo.")
@@ -751,7 +770,7 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 	if m.agentActive {
 		m.session.AddUser(prompt)
 		workDir, _ := os.Getwd()
-		ch, cmd := runAgentLoop(m.client, m.session.Messages, workDir, m.autoAccept, m.searchManager)
+		ch, cmd := runAgentLoop(m.client, m.session.Messages, workDir, m.autoAccept, m.searchManager, m.cfg.MaxSubagents)
 		m.agentChan = ch
 		spinnerCmd := m.spinner.Start("Agent thinking...")
 		return m, tea.Batch(spinnerCmd, cmd, listenForAgentEvent(ch))
@@ -781,7 +800,7 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 
 func (m *Model) resize() {
 	statusHeight := 2
-	inputHeight := 5 // textarea with border
+	inputHeight := 5 // textarea with border (min height; grows with content up to MaxHeight)
 	// Reserve space for popup if active.
 	popupHeight := 0
 	if m.completion.ShouldShow() {

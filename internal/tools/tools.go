@@ -32,6 +32,15 @@ func SetSearchManager(m *search.Manager) {
 	searchMgr = m
 }
 
+// RequiresConfirmation returns true for tools that mutate state and need user approval.
+func RequiresConfirmation(name string) bool {
+	switch name {
+	case "write_file", "patch_file", "run_command":
+		return true
+	}
+	return false
+}
+
 // Definitions returns the tool definitions to send with API requests.
 func Definitions() []api.ToolDefinition {
 	return []api.ToolDefinition{
@@ -246,6 +255,31 @@ func Definitions() []api.ToolDefinition {
 						},
 					},
 					"required": []string{"url"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: api.FunctionSchema{
+				Name: "delegate_task",
+				Description: "Delegate a self-contained analysis task to a subagent with its own tool loop. " +
+					"IMPORTANT: when you need to analyze multiple independent targets (files, modules, topics), " +
+					"call delegate_task MULTIPLE TIMES IN THE SAME RESPONSE — one call per target. " +
+					"All calls issued in the same response run in parallel, so N subagents finish in the time of one. " +
+					"Never call delegate_task sequentially one at a time; always batch all delegations into a single response.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"task": map[string]interface{}{
+							"type":        "string",
+							"description": "Clear description of what the subagent should do and return. Be specific about what information you need back.",
+						},
+						"context": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional additional context or file content to pass to the subagent (e.g. file contents already read).",
+						},
+					},
+					"required": []string{"task"},
 				},
 			},
 		},

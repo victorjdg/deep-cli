@@ -4,17 +4,21 @@ import (
 	"github.com/victorjdg/deep-cli/internal/api"
 )
 
+const agentParallelismHint = " When using delegate_task, always issue ALL delegations in a single response so they run in parallel — never one at a time."
+
 var systemPrompts = map[string]string{
 	"deepseek-chat": "You are an expert programming assistant. Help with coding tasks, explain concepts clearly, " +
 		"provide correct and idiomatic code examples, debug issues, and follow best practices. " +
-		"Be concise and direct. When showing code, use the appropriate language and include only what is necessary.",
+		"Be concise and direct. When showing code, use the appropriate language and include only what is necessary." +
+		agentParallelismHint,
 	"deepseek-reasoner": "You are an expert programming assistant with deep reasoning capabilities. " +
 		"Think step by step through complex problems. Help with coding tasks, architecture decisions, " +
 		"debugging, and code review. Provide correct and idiomatic code examples, and follow best practices. " +
-		"Be thorough in your analysis but concise in your explanations.",
+		"Be thorough in your analysis but concise in your explanations." +
+		agentParallelismHint,
 }
 
-const defaultSystemPrompt = "You are an expert programming assistant. Help with coding tasks, provide clear code examples, and follow best practices."
+const defaultSystemPrompt = "You are an expert programming assistant. Help with coding tasks, provide clear code examples, and follow best practices." + agentParallelismHint
 
 // SystemPromptForModel returns the system prompt for the given model name.
 func SystemPromptForModel(model string) string {

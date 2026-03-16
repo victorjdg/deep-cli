@@ -1,8 +1,8 @@
-# API Clients
+# API Client
 
 ## Client Interface
 
-Both backends implement the same interface defined in `internal/api/client.go`:
+The DeepSeek client implements the interface defined in `internal/api/client.go`:
 
 ```go
 type Client interface {
@@ -13,8 +13,6 @@ type Client interface {
     ListModels(ctx context.Context) ([]string, error)
 }
 ```
-
-The active client is selected in `api.NewClient(cfg)` based on `cfg.UseLocal`.
 
 ## DeepSeek Cloud (`internal/api/deepseek.go`)
 
@@ -32,27 +30,9 @@ The active client is selected in `api.NewClient(cfg)` based on `cfg.UseLocal`.
 
 **Model listing:** GET `https://api.deepseek.com/models`, returns model IDs.
 
-## Ollama Local (`internal/api/ollama.go`)
-
-| Property     | Value                              |
-|--------------|------------------------------------|
-| Endpoint     | `{OLLAMA_HOST}/api/chat`           |
-| Auth         | None                               |
-| Temperature  | `0.1`                              |
-| Num predict  | `4096` (equivalent to max tokens)  |
-| Timeout      | 120s (regular), none (stream)      |
-
-**Streaming:** Line-delimited JSON. Each line contains a `message.content` delta and a `done` boolean.
-
-**Tool calling:** Not natively supported. `CompleteWithTools` falls back to a regular `Complete` call, returning nil tool calls. Agent mode is therefore unavailable in local mode.
-
-**Connection check:** GET `{OLLAMA_HOST}/api/tags` with a 5-second timeout.
-
-**Model listing:** GET `{OLLAMA_HOST}/api/tags`, returns model names from the `models` array.
-
 ## Token Tracking
 
-Both clients return a `TokenUsage` struct after each call:
+Each call returns a `TokenUsage` struct:
 
 ```go
 type TokenUsage struct {

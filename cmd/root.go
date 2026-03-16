@@ -44,10 +44,12 @@ func init() {
 	rootCmd.PersistentFlags().BoolP("local", "l", false, "Force local Ollama mode")
 	rootCmd.PersistentFlags().String("ollama-host", "", "Ollama host URL")
 	rootCmd.PersistentFlags().Int("max-context", 0, "Maximum context window size in tokens (default: auto-detected by model)")
+	rootCmd.PersistentFlags().Int("max-subagents", 0, "Maximum number of subagents running in parallel (default: 5)")
 
 	_ = viper.BindPFlag("api-key", rootCmd.PersistentFlags().Lookup("api-key"))
 	_ = viper.BindPFlag("model", rootCmd.PersistentFlags().Lookup("model"))
 	_ = viper.BindPFlag("local", rootCmd.PersistentFlags().Lookup("local"))
 	_ = viper.BindPFlag("ollama-host", rootCmd.PersistentFlags().Lookup("ollama-host"))
 	_ = viper.BindPFlag("max-context", rootCmd.PersistentFlags().Lookup("max-context"))
+	_ = viper.BindPFlag("max-subagents", rootCmd.PersistentFlags().Lookup("max-subagents"))
 }

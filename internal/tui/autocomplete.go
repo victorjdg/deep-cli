@@ -22,6 +22,7 @@ var slashCommands = []commandInfo{
 	{name: "/init", desc: "Generate CONTEXT.md for this project"},
 	{name: "/model", desc: "Show or change model"},
 	{name: "/models", desc: "List available models"},
+	{name: "/save", desc: "Export conversation to markdown"},
 	{name: "/search", desc: "Show or change search engine"},
 	{name: "/undo", desc: "Revert last agent file edit"},
 }

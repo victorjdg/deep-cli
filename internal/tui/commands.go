@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -227,7 +228,10 @@ type agentEvent struct {
 
 const maxAgentIterations = 10
 
-func runAgentLoop(client api.Client, messages []api.Message, workDir string, autoAccept bool, searchMgr *search.Manager) (<-chan agentEvent, tea.Cmd) {
+func runAgentLoop(client api.Client, messages []api.Message, workDir string, autoAccept bool, searchMgr *search.Manager, maxSubagents int) (<-chan agentEvent, tea.Cmd) {
+	// Semaphore to cap parallel subagent API calls.
+	sem := make(chan struct{}, maxSubagents)
+
 	ch := make(chan agentEvent)
 	cmd := func() tea.Msg {
 		defer close(ch)
@@ -272,11 +276,10 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 				ToolCalls: toolCalls,
 			})
 
-			// Execute each tool and send progress events.
-			for _, tc := range toolCalls {
+			// Compute display args up front (needed for both phases).
+			displayArgsList := make([]string, len(toolCalls))
+			for idx, tc := range toolCalls {
 				displayArgs := tc.Function.Arguments
-
-				// Build a compact display string for write_file and run_command.
 				switch tc.Function.Name {
 				case "write_file":
 					var preview struct {
@@ -295,6 +298,167 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 						displayArgs = fmt.Sprintf(`{"command":%q}`, preview.Command)
 					}
 				}
+				displayArgsList[idx] = displayArgs
+			}
+
+			// toolResults holds the result string for each tool call (indexed by position).
+			toolResults := make([]string, len(toolCalls))
+
+			// Classify tools: parallel (read-only or autoAccept) vs sequential (needs confirmation).
+			type parallelWork struct {
+				idx int
+				tc  api.ToolCall
+			}
+			var parallelBatch []parallelWork
+			var sequentialBatch []parallelWork
+
+			for idx, tc := range toolCalls {
+				if !autoAccept && tools.RequiresConfirmation(tc.Function.Name) {
+					sequentialBatch = append(sequentialBatch, parallelWork{idx, tc})
+				} else {
+					parallelBatch = append(parallelBatch, parallelWork{idx, tc})
+				}
+			}
+
+			// Phase A — run read-only (and all tools when autoAccept) in parallel.
+			if len(parallelBatch) > 0 {
+				if len(parallelBatch) == 1 {
+					pw := parallelBatch[0]
+					ch <- agentEvent{
+						tool:         &agentToolUseMsg{name: pw.tc.Function.Name, args: displayArgsList[pw.idx]},
+						spinnerLabel: spinnerLabelForTool(pw.tc.Function.Name),
+					}
+				} else {
+					ch <- agentEvent{spinnerLabel: fmt.Sprintf("Agent working (%d tools in parallel)...", len(parallelBatch))}
+					for _, pw := range parallelBatch {
+						ch <- agentEvent{tool: &agentToolUseMsg{name: pw.tc.Function.Name, args: displayArgsList[pw.idx]}}
+					}
+				}
+
+				var wg sync.WaitGroup
+				var failedMu sync.Mutex
+				for _, pw := range parallelBatch {
+					wg.Add(1)
+					go func(idx int, tc api.ToolCall) {
+						defer wg.Done()
+						displayArgs := displayArgsList[idx]
+
+						var result string
+						var execErr error
+
+						switch tc.Function.Name {
+						case "write_file":
+							// autoAccept must be true to reach here.
+							var fileArgs struct {
+								Path    string `json:"path"`
+								Content string `json:"content"`
+							}
+							if err := json.Unmarshal([]byte(tc.Function.Arguments), &fileArgs); err != nil {
+								result = fmt.Sprintf("Error: invalid arguments: %s", err)
+							} else {
+								prev, existed := tools.ReadPrevious(fileArgs.Path, workDir)
+								result, execErr = tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
+								if execErr != nil {
+									result = fmt.Sprintf("Error: %s", execErr)
+								} else {
+									absPath, _ := filepath.Abs(filepath.Join(workDir, fileArgs.Path))
+									ch <- agentEvent{undoEntry: &agentUndoEntry{
+										path:     absPath,
+										previous: prev,
+										wasNew:   !existed,
+									}}
+								}
+							}
+
+						case "patch_file":
+							// autoAccept must be true to reach here.
+							var patchArgs struct {
+								Path      string `json:"path"`
+								OldString string `json:"old_string"`
+								NewString string `json:"new_string"`
+							}
+							if err := json.Unmarshal([]byte(tc.Function.Arguments), &patchArgs); err != nil {
+								result = fmt.Sprintf("Error: invalid arguments: %s", err)
+							} else {
+								prev, existed := tools.ReadPrevious(patchArgs.Path, workDir)
+								result, execErr = tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
+								if execErr != nil {
+									result = fmt.Sprintf("Error: %s", execErr)
+								} else if existed {
+									absPath, _ := filepath.Abs(filepath.Join(workDir, patchArgs.Path))
+									ch <- agentEvent{undoEntry: &agentUndoEntry{
+										path:     absPath,
+										previous: prev,
+										wasNew:   false,
+									}}
+								}
+							}
+
+						case "run_command":
+							// autoAccept must be true to reach here.
+							var cmdArgs struct {
+								Command string `json:"command"`
+							}
+							if err := json.Unmarshal([]byte(tc.Function.Arguments), &cmdArgs); err != nil {
+								result = fmt.Sprintf("Error: invalid arguments: %s", err)
+							} else {
+								result, execErr = execRunCommand(cmdArgs.Command)
+								if execErr != nil {
+									result = fmt.Sprintf("Error: %s", execErr)
+								}
+							}
+
+						case "delegate_task":
+							var taskArgs struct {
+								Task    string `json:"task"`
+								Context string `json:"context"`
+							}
+							if err := json.Unmarshal([]byte(tc.Function.Arguments), &taskArgs); err != nil {
+								result = fmt.Sprintf("Error: invalid arguments: %s", err)
+							} else {
+								result = runSubagent(client, taskArgs.Task, taskArgs.Context, workDir, searchMgr, sem)
+							}
+
+						default:
+							failedMu.Lock()
+							cachedErr, failed := failedTools[tc.Function.Name]
+							failedMu.Unlock()
+							if failed {
+								result = cachedErr
+							} else {
+								result, execErr = tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
+								if execErr != nil {
+									result = fmt.Sprintf("Error: %s", execErr)
+									failedMu.Lock()
+									failedTools[tc.Function.Name] = result
+									failedMu.Unlock()
+									ch <- agentEvent{warn: fmt.Sprintf("Tool '%s' failed and has been disabled for this session: %s", tc.Function.Name, execErr)}
+								}
+							}
+						}
+
+						toolResults[idx] = result
+						ch <- agentEvent{trace: &agentTraceMsg{
+							tool:   tc.Function.Name,
+							args:   displayArgs,
+							result: result,
+						}}
+					}(pw.idx, pw.tc)
+				}
+				wg.Wait()
+
+				// Disable failed tools from defs after all goroutines complete.
+				failedMu.Lock()
+				for name := range failedTools {
+					defs = removeTool(defs, name)
+				}
+				failedMu.Unlock()
+			}
+
+			// Phase B — sequential confirmation for write/patch/command tools (autoAccept=false).
+			for _, pw := range sequentialBatch {
+				idx, tc := pw.idx, pw.tc
+				displayArgs := displayArgsList[idx]
 
 				ch <- agentEvent{
 					tool:         &agentToolUseMsg{name: tc.Function.Name, args: displayArgs},
@@ -312,7 +476,7 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 					if err := json.Unmarshal([]byte(tc.Function.Arguments), &cmdArgs); err != nil {
 						result = fmt.Sprintf("Error: invalid arguments: %s", err)
 					} else {
-						approved := autoAccept || requestConfirm(ch, confirmKindCommand, cmdArgs.Command, "", nil)
+						approved := requestConfirm(ch, confirmKindCommand, cmdArgs.Command, "", nil)
 						if !approved {
 							result = "User declined to run the command."
 						} else {
@@ -333,7 +497,7 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 					} else {
 						prev, existed := tools.ReadPrevious(fileArgs.Path, workDir)
 						detail := fmt.Sprintf("%d lines", strings.Count(fileArgs.Content, "\n")+1)
-						approved := autoAccept || requestConfirm(ch, confirmKindEdit, fileArgs.Path, detail, nil)
+						approved := requestConfirm(ch, confirmKindEdit, fileArgs.Path, detail, nil)
 						if !approved {
 							result = "User declined the file write."
 						} else {
@@ -363,7 +527,7 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 						prev, existed := tools.ReadPrevious(patchArgs.Path, workDir)
 						diff := buildPatchDiff(patchArgs.OldString, patchArgs.NewString, 2, 20)
 						detail := fmt.Sprintf("replace %d chars → %d chars", len(patchArgs.OldString), len(patchArgs.NewString))
-						approved := autoAccept || requestConfirm(ch, confirmKindEdit, patchArgs.Path, detail, diff)
+						approved := requestConfirm(ch, confirmKindEdit, patchArgs.Path, detail, diff)
 						if !approved {
 							result = "User declined the file edit."
 						} else {
@@ -380,32 +544,21 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 							}
 						}
 					}
-
-				default:
-					// If this tool already failed this session, block the retry immediately.
-					if cachedErr, failed := failedTools[tc.Function.Name]; failed {
-						result = cachedErr
-					} else {
-						result, execErr = tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
-						if execErr != nil {
-							result = fmt.Sprintf("Error: %s", execErr)
-							failedTools[tc.Function.Name] = result
-							// Remove from defs so the model won't call it again next iteration.
-							defs = removeTool(defs, tc.Function.Name)
-							ch <- agentEvent{warn: fmt.Sprintf("Tool '%s' failed and has been disabled for this session: %s", tc.Function.Name, execErr)}
-						}
-					}
 				}
 
+				toolResults[idx] = result
 				ch <- agentEvent{trace: &agentTraceMsg{
 					tool:   tc.Function.Name,
 					args:   displayArgs,
 					result: result,
 				}}
+			}
 
+			// Phase C — append all results in original tool call order.
+			for idx, tc := range toolCalls {
 				msgs = append(msgs, api.Message{
 					Role:       api.RoleTool,
-					Content:    result,
+					Content:    toolResults[idx],
 					ToolCallID: tc.ID,
 				})
 			}
@@ -639,6 +792,8 @@ func spinnerLabelForTool(name string) string {
 		return "Getting file info..."
 	case "run_command":
 		return "Running command..."
+	case "delegate_task":
+		return "Subagent working..."
 	default:
 		return fmt.Sprintf("Calling %s...", name)
 	}
@@ -653,6 +808,76 @@ func removeTool(defs []api.ToolDefinition, name string) []api.ToolDefinition {
 		}
 	}
 	return result
+}
+
+// runSubagent executes a delegated task in a subagent with its own tool loop.
+// It acquires a slot from sem to cap parallel concurrency, then runs up to
+// maxAgentIterations of CompleteWithTools, returning the final text result.
+func runSubagent(client api.Client, task, extraContext, workDir string, searchMgr *search.Manager, sem chan struct{}) string {
+	// Acquire semaphore slot.
+	sem <- struct{}{}
+	defer func() { <-sem }()
+
+	systemPrompt := "You are a focused subagent. Complete the assigned task using the available tools and return a clear, concise result. Do not ask for clarification — work with what you have."
+
+	var userContent string
+	if extraContext != "" {
+		userContent = fmt.Sprintf("Context:\n%s\n\nTask:\n%s", extraContext, task)
+	} else {
+		userContent = fmt.Sprintf("Task:\n%s", task)
+	}
+
+	msgs := []api.Message{
+		{Role: api.RoleSystem, Content: systemPrompt},
+		{Role: api.RoleUser, Content: userContent},
+	}
+
+	defs := tools.Definitions()
+	// Subagents cannot delegate further — remove delegate_task to prevent recursion.
+	defs = removeTool(defs, "delegate_task")
+	if searchMgr == nil || !searchMgr.IsConfigured() {
+		defs = removeTool(defs, "web_search")
+	}
+
+	for i := 0; i < maxAgentIterations; i++ {
+		content, toolCalls, _, err := client.CompleteWithTools(context.Background(), msgs, defs)
+		if err != nil {
+			return fmt.Sprintf("Subagent error: %s", err)
+		}
+
+		if len(toolCalls) == 0 {
+			return content
+		}
+
+		msgs = append(msgs, api.Message{
+			Role:      api.RoleAssistant,
+			ToolCalls: toolCalls,
+		})
+
+		for _, tc := range toolCalls {
+			var result string
+			var execErr error
+
+			// Subagents never run destructive tools — treat them as read-only.
+			switch tc.Function.Name {
+			case "write_file", "patch_file", "run_command":
+				result = fmt.Sprintf("Error: subagents are not permitted to run '%s'", tc.Function.Name)
+			default:
+				result, execErr = tools.Execute(tc.Function.Name, tc.Function.Arguments, workDir)
+				if execErr != nil {
+					result = fmt.Sprintf("Error: %s", execErr)
+				}
+			}
+
+			msgs = append(msgs, api.Message{
+				Role:       api.RoleTool,
+				Content:    result,
+				ToolCallID: tc.ID,
+			})
+		}
+	}
+
+	return fmt.Sprintf("Subagent reached iteration limit (%d) without a final answer.", maxAgentIterations)
 }
 
 func compactConversation(client api.Client, messages []api.Message) tea.Cmd {

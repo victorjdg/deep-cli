@@ -2,7 +2,7 @@
 
 ## Overview
 
-DeepSeek CLI is a terminal application built with Go and the [BubbleTea](https://github.com/charmbracelet/bubbletea) TUI framework. It follows an event-driven model-update-view architecture with a clean separation between the API layer, session management, and the user interface.
+DeepSeek CLI is a terminal application built with Go and the [BubbleTea](https://github.com/charmbracelet/bubbletea) TUI framework. It requires a DeepSeek API key and follows an event-driven model-update-view architecture with a clean separation between the API layer, session management, and the user interface.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -25,7 +25,7 @@ DeepSeek CLI is a terminal application built with Go and the [BubbleTea](https:/
 
 ```
 internal/
-├── api/        Client interface and backend implementations
+├── api/        DeepSeek API client
 ├── config/     Config struct and resolution logic
 ├── markdown/   Terminal markdown renderer
 ├── search/     Web search engine abstraction and implementations
@@ -130,7 +130,7 @@ Each sub-component is a struct with its own `Update(msg) (Self, tea.Cmd)` and `V
 The status bar is two lines tall (`statusHeight = 2` in `resize()`):
 
 ```
- cloud │ deepseek-chat │ T:1234 │ AGENT │ Ctx:9%          /help
+ deepseek-chat │ T:1234 │ AGENT │ Ctx:9%          /help
  Agent: ON (Ctrl+A)   Auto-accept: OFF (/auto or Ctrl+A)   Enhance: OFF (Ctrl+E)
 ```
 

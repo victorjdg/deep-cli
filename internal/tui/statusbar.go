@@ -126,7 +126,8 @@ func (m statusBarModel) View() string {
 		hintStyle.Render("   ") +
 		renderHint("Auto-accept", onOff(m.autoAccept), "/auto or Ctrl+A") +
 		hintStyle.Render("   ") +
-		renderHint("Enhance", onOff(m.enhance), "Ctrl+E")
+		renderHint("Enhance", onOff(m.enhance), "Ctrl+E") +
+		hintStyle.Render("   Trace: Ctrl+T")
 
 	line2 = statusBarStyle.Width(m.width).Render(line2)
 
