@@ -1,6 +1,6 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-s -w -X main.Version=$(VERSION)"
-BINARY := deepseek
+BINARY := deep-cli
 GOFLAGS := -trimpath
 
 .PHONY: build install clean build-all
