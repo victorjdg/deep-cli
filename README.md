@@ -35,7 +35,7 @@ cd deep-cli
 make build
 ```
 
-This produces a `deepseek` binary in the current directory.
+This produces a `deep-cli` binary in the current directory.
 
 ### Install to PATH
 
@@ -80,7 +80,7 @@ Configuration priority (highest to lowest): **CLI flags → environment variable
 ### Interactive mode (REPL)
 
 ```bash
-deepseek [flags]
+deep-cli [flags]
 ```
 
 Flags:
@@ -95,7 +95,7 @@ Flags:
 ### Single-prompt mode
 
 ```bash
-deepseek chat "Explain what a B-tree is"
+deep-cli chat "Explain what a B-tree is"
 ```
 
 ---

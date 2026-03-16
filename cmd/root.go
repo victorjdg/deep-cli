@@ -17,9 +17,9 @@ func SetVersion(v string) {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "deepseek",
-	Short: "DeepSeek Coder CLI - AI programming assistant",
-	Long:  "An interactive AI coding assistant powered by DeepSeek, with local Ollama and cloud API support.",
+	Use:   "deep-cli",
+	Short: "Deep CLI - AI programming assistant",
+	Long:  "An interactive AI coding assistant powered by DeepSeek.",
 	Version: version,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()

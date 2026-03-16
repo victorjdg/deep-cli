@@ -127,7 +127,7 @@ func runSetup(cfg *config.Config) error {
 	}
 
 	fmt.Println()
-	fmt.Println(success.Render("Setup complete! Run 'deepseek' to start."))
+	fmt.Println(success.Render("Setup complete! Run 'deep-cli' to start."))
 	return nil
 }
 
