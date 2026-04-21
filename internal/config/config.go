@@ -12,8 +12,6 @@ import (
 type Config struct {
 	APIKey           string
 	Model            string
-	UseLocal         bool
-	OllamaHost       string
 	APIURL           string
 	MaxContextTokens int
 	MaxSubagents     int
@@ -57,41 +55,16 @@ func Load() (*Config, error) {
 		apiKey = os.Getenv("DEEPSEEK_API_KEY")
 	}
 
+	if apiKey == "" {
+		return nil, fmt.Errorf("DEEPSEEK_API_KEY is required. Set it via the environment variable or --api-key flag")
+	}
+
 	model := v.GetString("model")
 	if model == "" {
 		model = os.Getenv("DEEPSEEK_MODEL")
 	}
-	// Model default is set after useLocal is resolved (see below).
-
-	ollamaHost := v.GetString("ollama-host")
-	if ollamaHost == "" {
-		ollamaHost = os.Getenv("OLLAMA_HOST")
-	}
-	if ollamaHost == "" {
-		ollamaHost = "http://localhost:11434"
-	}
-
-	useLocal := v.GetBool("local")
-	if !useLocal {
-		envLocal := os.Getenv("DEEPSEEK_USE_LOCAL")
-		if envLocal == "true" {
-			useLocal = true
-		} else if apiKey == "" {
-			useLocal = true
-		}
-	}
-
-	if !useLocal && apiKey == "" {
-		return nil, fmt.Errorf("DEEPSEEK_API_KEY is required for cloud mode. Set it or use --local flag")
-	}
-
-	// Set default model based on mode.
 	if model == "" {
-		if useLocal {
-			model = "deepseek-coder:6.7b"
-		} else {
-			model = "deepseek-chat"
-		}
+		model = "deepseek-chat"
 	}
 
 	// Resolve max context tokens: flag > env > model lookup > fallback.
@@ -122,8 +95,6 @@ func Load() (*Config, error) {
 	return &Config{
 		APIKey:           apiKey,
 		Model:            model,
-		UseLocal:         useLocal,
-		OllamaHost:       ollamaHost,
 		APIURL:           "https://api.deepseek.com/chat/completions",
 		MaxContextTokens: maxContext,
 		MaxSubagents:     maxSubagents,

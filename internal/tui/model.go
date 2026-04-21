@@ -68,21 +68,16 @@ func newModel(cfg *config.Config) Model {
 	tools.SetSearchManager(searchManager)
 	SetSlashSearchManager(searchManager)
 
-	mode := "local"
-	if !cfg.UseLocal {
-		mode = "cloud"
-	}
-
 	return Model{
 		cfg:           cfg,
 		client:        client,
 		session:       sess,
 		input:         newInputModel(),
 		viewport:      newViewportModel(),
-		statusBar:     newStatusBarModel(mode, cfg.Model, !cfg.UseLocal),
+		statusBar:     newStatusBarModel(cfg.Model),
 		spinner:       newSpinnerModel(),
 		state:         stateReady,
-		agentActive:   !cfg.UseLocal,
+		agentActive:   true,
 		streamBuf:     &strings.Builder{},
 		history:       newPromptHistory(),
 		searchManager: searchManager,
@@ -115,21 +110,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case connectionCheckMsg:
 		if msg.err != nil {
-			mode := "local"
-			if !m.cfg.UseLocal {
-				mode = "cloud"
-			}
-			welcome := fmt.Sprintf("DeepSeek CLI (%s mode)\nWarning: %s", mode, msg.err)
+			welcome := fmt.Sprintf("DeepSeek CLI │ Model: %s\nWarning: %s", m.cfg.Model, msg.err)
 			m.viewport.AddWelcome(welcome)
 		} else {
-			mode := "local"
-			if !m.cfg.UseLocal {
-				mode = "cloud"
-			}
-			welcome := fmt.Sprintf("DeepSeek CLI (%s mode) │ Model: %s │ Host: %s\nType /help for available commands.", mode, m.cfg.Model, m.cfg.OllamaHost)
-			if !m.cfg.UseLocal {
-				welcome = fmt.Sprintf("DeepSeek CLI (%s mode) │ Model: %s\nType /help for available commands.", mode, m.cfg.Model)
-			}
+			welcome := fmt.Sprintf("DeepSeek CLI │ Model: %s\nType /help for available commands.", m.cfg.Model)
 
 			// Warn if configured model not found in available models.
 			if len(msg.models) > 0 {
@@ -665,10 +649,6 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 		}
 
 		if result.toggleAgent {
-			if m.cfg.UseLocal {
-				m.viewport.AddSlashOutput("Agent mode is only available in cloud mode.")
-				return m, nil
-			}
 			m.agentActive = !m.agentActive
 			m.statusBar.SetAgent(m.agentActive)
 			if m.agentActive {

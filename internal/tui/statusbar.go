@@ -7,7 +7,6 @@ import (
 )
 
 type statusBarModel struct {
-	mode        string
 	model       string
 	tokens      int
 	contextPct  float64
@@ -18,11 +17,10 @@ type statusBarModel struct {
 	autoAccept  bool   // auto-accept edits/commands active
 }
 
-func newStatusBarModel(mode, model string, agent bool) statusBarModel {
+func newStatusBarModel(model string) statusBarModel {
 	return statusBarModel{
-		mode:  mode,
 		model: model,
-		agent: agent,
+		agent: true,
 	}
 }
 
@@ -36,10 +34,6 @@ func (m *statusBarModel) SetTokens(n int) {
 
 func (m *statusBarModel) SetModel(model string) {
 	m.model = model
-}
-
-func (m *statusBarModel) SetMode(mode string) {
-	m.mode = mode
 }
 
 func (m *statusBarModel) SetHint(hint string) {
@@ -79,8 +73,8 @@ func (m statusBarModel) View() string {
 		return statusBarStyle.Width(m.width).Render(hint)
 	}
 
-	// ── Line 1: mode, model, tokens, active flags, context % ──
-	left := fmt.Sprintf(" %s │ %s │ T:%d", m.mode, m.model, m.tokens)
+	// ── Line 1: model, tokens, active flags, context % ──
+	left := fmt.Sprintf(" %s │ T:%d", m.model, m.tokens)
 	if m.enhance {
 		left += lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render(" │ ENHANCE")
 	}

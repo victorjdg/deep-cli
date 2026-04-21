@@ -15,10 +15,7 @@ type Client interface {
 	ListModels(ctx context.Context) ([]string, error)
 }
 
-// NewClient creates the appropriate client based on config.
+// NewClient creates a DeepSeek API client.
 func NewClient(cfg *config.Config) Client {
-	if cfg.UseLocal {
-		return NewOllamaClient(cfg.OllamaHost, cfg.Model)
-	}
 	return NewDeepSeekClient(cfg.APIKey, cfg.Model, cfg.APIURL)
 }

@@ -44,41 +44,7 @@ type TokenUsage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
-// Ollama types
-
-type ollamaRequest struct {
-	Model    string        `json:"model"`
-	Messages []Message     `json:"messages"`
-	Stream   bool          `json:"stream"`
-	Options  ollamaOptions `json:"options"`
-}
-
-type ollamaOptions struct {
-	Temperature float64 `json:"temperature"`
-	NumPredict  int     `json:"num_predict"`
-}
-
-type ollamaResponse struct {
-	Message         ollamaMessage `json:"message"`
-	Done            bool          `json:"done"`
-	PromptEvalCount int           `json:"prompt_eval_count,omitempty"`
-	EvalCount       int           `json:"eval_count,omitempty"`
-}
-
-type ollamaMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type ollamaTagsResponse struct {
-	Models []ollamaModel `json:"models"`
-}
-
-type ollamaModel struct {
-	Name string `json:"name"`
-}
-
-// DeepSeek cloud types
+// DeepSeek types
 
 type deepseekRequest struct {
 	Model       string           `json:"model"`
