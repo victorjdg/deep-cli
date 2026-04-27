@@ -76,7 +76,7 @@ func (d *DeepSeekClient) Complete(ctx context.Context, messages []Message) (stri
 	return result.Choices[0].Message.Content, result.Usage, nil
 }
 
-func (d *DeepSeekClient) CompleteWithTools(ctx context.Context, messages []Message, tools []ToolDefinition) (string, []ToolCall, TokenUsage, error) {
+func (d *DeepSeekClient) CompleteWithTools(ctx context.Context, messages []Message, tools []ToolDefinition) (string, string, []ToolCall, TokenUsage, error) {
 	body := deepseekRequest{
 		Model:       d.model,
 		Messages:    messages,
@@ -88,12 +88,12 @@ func (d *DeepSeekClient) CompleteWithTools(ctx context.Context, messages []Messa
 
 	data, err := json.Marshal(body)
 	if err != nil {
-		return "", nil, TokenUsage{}, err
+		return "", "", nil, TokenUsage{}, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", d.apiURL, bytes.NewReader(data))
 	if err != nil {
-		return "", nil, TokenUsage{}, err
+		return "", "", nil, TokenUsage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+d.apiKey)
@@ -102,26 +102,26 @@ func (d *DeepSeekClient) CompleteWithTools(ctx context.Context, messages []Messa
 	toolClient := &http.Client{Timeout: 120 * time.Second}
 	resp, err := toolClient.Do(req)
 	if err != nil {
-		return "", nil, TokenUsage{}, fmt.Errorf("failed to connect to DeepSeek API: %w", err)
+		return "", "", nil, TokenUsage{}, fmt.Errorf("failed to connect to DeepSeek API: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return "", nil, TokenUsage{}, fmt.Errorf("DeepSeek API returned status %d: %s", resp.StatusCode, string(respBody))
+		return "", "", nil, TokenUsage{}, fmt.Errorf("DeepSeek API returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result deepseekResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", nil, TokenUsage{}, err
+		return "", "", nil, TokenUsage{}, err
 	}
 
 	if len(result.Choices) == 0 {
-		return "", nil, TokenUsage{}, fmt.Errorf("no response from DeepSeek API")
+		return "", "", nil, TokenUsage{}, fmt.Errorf("no response from DeepSeek API")
 	}
 
 	choice := result.Choices[0]
-	return choice.Message.Content, choice.Message.ToolCalls, result.Usage, nil
+	return choice.Message.Content, choice.Message.ReasoningContent, choice.Message.ToolCalls, result.Usage, nil
 }
 
 func (d *DeepSeekClient) Stream(ctx context.Context, messages []Message) (<-chan StreamChunk, error) {

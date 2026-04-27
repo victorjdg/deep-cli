@@ -26,7 +26,6 @@ type slashResult struct {
 	quit             bool
 	listModels       bool   // triggers async model listing
 	compact          bool   // triggers conversation compaction
-	toggleEnhance    bool   // toggles prompt enhancement mode
 	toggleAgent      bool   // toggles agent mode (tool calling)
 	toggleAutoAccept bool   // toggles auto-accept mode
 	initProject      bool   // triggers CONTEXT.md generation
@@ -43,8 +42,7 @@ type costInfo struct {
 	ContextPct       float64
 	MaxContextTokens int
 	LastPromptTokens int
-	MessageCount     int
-	EnhanceActive    bool
+	MessageCount int
 }
 
 func handleSlashCommand(input string, currentModel string, cost costInfo) slashResult {
@@ -64,7 +62,6 @@ func handleSlashCommand(input string, currentModel string, cost costInfo) slashR
   /file <path> ...   Load file(s) into conversation context
   /clear             Clear conversation history
   /compact           Summarize and compact conversation context
-  /enhance           Toggle prompt enhancement (Ctrl+E)
   /agent             Toggle agent mode (tool calling)
   /auto              Toggle auto-accept (skip confirmation for file edits and commands)
   /init              Generate a CONTEXT.md file for the current project
@@ -79,7 +76,7 @@ func handleSlashCommand(input string, currentModel string, cost costInfo) slashR
 Shortcuts:
   Enter            Submit message
   Shift+Enter      Insert newline
-  Ctrl+E           Toggle prompt enhancement
+  Ctrl+G           Toggle agent mode
   Ctrl+A           Toggle auto-accept
   Ctrl+T           Toggle agent trace panel
   Ctrl+C           Cancel streaming / Quit
@@ -122,9 +119,6 @@ Shortcuts:
 			return slashResult{output: "Nothing to compact. Start a conversation first."}
 		}
 		return slashResult{compact: true}
-
-	case "/enhance":
-		return slashResult{toggleEnhance: true}
 
 	case "/search":
 		if slashSearchMgr == nil {
@@ -239,7 +233,7 @@ func looksLikePath(s string) bool {
 		return true
 	}
 	// Known slash commands.
-	cmds := []string{"/help", "/clear", "/compact", "/enhance", "/agent", "/auto", "/init", "/undo", "/save", "/search", "/models", "/model", "/cost", "/exit", "/file"}
+	cmds := []string{"/help", "/clear", "/compact", "/agent", "/auto", "/init", "/undo", "/save", "/search", "/models", "/model", "/cost", "/exit", "/file"}
 	lower := strings.ToLower(s)
 	for _, c := range cmds {
 		if lower == c {

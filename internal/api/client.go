@@ -9,7 +9,7 @@ import (
 // Client defines the interface for interacting with an LLM backend.
 type Client interface {
 	Complete(ctx context.Context, messages []Message) (string, TokenUsage, error)
-	CompleteWithTools(ctx context.Context, messages []Message, tools []ToolDefinition) (string, []ToolCall, TokenUsage, error)
+	CompleteWithTools(ctx context.Context, messages []Message, tools []ToolDefinition) (string, string, []ToolCall, TokenUsage, error)
 	Stream(ctx context.Context, messages []Message) (<-chan StreamChunk, error)
 	CheckConnection(ctx context.Context) error
 	ListModels(ctx context.Context) ([]string, error)

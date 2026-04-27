@@ -21,12 +21,9 @@ type Model struct {
     tracePanel  tracePanel
     history     *promptHistory
 
-    enhanceActive      bool
-    agentActive        bool
-    autoAccept         bool
-    pendingFileContent string
-    pendingMessage     string
-    agentChan          <-chan agentEvent
+    agentActive bool
+    autoAccept  bool
+    agentChan   <-chan agentEvent
     confirmReplyCh     chan<- bool
     searchManager      *search.Manager
     undoStack          []agentUndoEntry
@@ -79,21 +76,20 @@ Two-line bar at the bottom of the screen.
 
 **Line 1** — mode, model, tokens, active flags, context percentage:
 ```
- cloud │ deepseek-chat │ T:1234 │ AGENT │ AUTO │ Ctx:9%          /help
+ deepseek-v4-pro │ T:1234 │ AGENT │ AUTO │ Ctx:9%          /help
 ```
 
 **Line 2** — static key hints showing current state of each toggle:
 ```
- Agent: ON (Ctrl+A)   Auto-accept: OFF (/auto or Ctrl+A)   Enhance: OFF (Ctrl+E)
+ Agent: ON (Ctrl+G)   Auto-accept: OFF (/auto or Ctrl+A)
 ```
 
 ON state is rendered in green; OFF state in dim gray.
 
-| Indicator | Color  | Condition              |
-|-----------|--------|------------------------|
-| `ENHANCE` | Yellow | Prompt enhancement ON  |
-| `AGENT`   | Green  | Agent mode ON          |
-| `AUTO`    | Amber  | Auto-accept ON         |
+| Indicator | Color | Condition     |
+|-----------|-------|---------------|
+| `AGENT`   | Green | Agent mode ON |
+| `AUTO`    | Amber | Auto-accept ON|
 
 When autocomplete is active, the status bar is replaced by a `Tab: <hint>` completion hint.
 
@@ -205,7 +201,6 @@ Defines all `tea.Cmd` factory functions and their corresponding `tea.Msg` result
 startStream()           → streamChunkMsg (batched ~50ms)... → streamDoneMsg/streamErrMsg
 runAgentLoop()          → agentSpinnerMsg → agentToolUseMsg → agentTraceMsg → agentUndoEntry
                           → agentConfirmMsg? → agentWarnMsg? → agentDoneMsg/agentErrMsg
-enhancePrompt()         → enhanceDoneMsg
 compactConversation()   → compactDoneMsg
 fetchModels()           → modelsListMsg
 checkConnection()       → connectionCheckMsg
@@ -250,6 +245,6 @@ Documents keybindings used throughout the app:
 | `Ctrl+D`      | Quit                      |
 | `Ctrl+C`      | Cancel stream / Quit      |
 | `Ctrl+L`      | Clear screen              |
-| `Ctrl+E`      | Toggle prompt enhancement |
+| `Ctrl+G`      | Toggle agent mode         |
 | `Ctrl+A`      | Toggle auto-accept        |
 | `Ctrl+T`      | Toggle agent trace panel  |

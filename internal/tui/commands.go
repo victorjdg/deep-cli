@@ -132,29 +132,6 @@ type compactDoneMsg struct {
 	err     error
 }
 
-type enhanceDoneMsg struct {
-	enhanced string
-	usage    api.TokenUsage
-	err      error
-	// Original submit context to continue with streaming.
-	originalInput string
-	fileContent   string
-}
-
-func enhancePrompt(client api.Client, prompt string) tea.Cmd {
-	return func() tea.Msg {
-		messages := []api.Message{
-			{
-				Role: api.RoleUser,
-				Content: "You are a prompt engineer. Rewrite the following user prompt to be clearer, more specific, and more effective. " +
-					"Keep the same intent and language. Return ONLY the improved prompt, nothing else. No explanations, no preamble.\n\n" +
-					"Original prompt:\n" + prompt,
-			},
-		}
-		enhanced, usage, err := client.Complete(context.Background(), messages)
-		return enhanceDoneMsg{enhanced: enhanced, usage: usage, err: err}
-	}
-}
 
 type agentDoneMsg struct {
 	content string
@@ -256,7 +233,7 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 			} else {
 				ch <- agentEvent{spinnerLabel: "Processing results..."}
 			}
-			content, toolCalls, usage, err := client.CompleteWithTools(context.Background(), msgs, defs)
+			content, reasoningContent, toolCalls, usage, err := client.CompleteWithTools(context.Background(), msgs, defs)
 			if err != nil {
 				ch <- agentEvent{err: err}
 				return nil
@@ -271,9 +248,11 @@ func runAgentLoop(client api.Client, messages []api.Message, workDir string, aut
 			}
 
 			// Add assistant message with tool calls.
+			// reasoning_content must be passed back if present (required by DeepSeek V4 thinking mode).
 			msgs = append(msgs, api.Message{
-				Role:      api.RoleAssistant,
-				ToolCalls: toolCalls,
+				Role:             api.RoleAssistant,
+				ReasoningContent: reasoningContent,
+				ToolCalls:        toolCalls,
 			})
 
 			// Compute display args up front (needed for both phases).
@@ -840,7 +819,7 @@ func runSubagent(client api.Client, task, extraContext, workDir string, searchMg
 	}
 
 	for i := 0; i < maxAgentIterations; i++ {
-		content, toolCalls, _, err := client.CompleteWithTools(context.Background(), msgs, defs)
+		content, reasoningContent, toolCalls, _, err := client.CompleteWithTools(context.Background(), msgs, defs)
 		if err != nil {
 			return fmt.Sprintf("Subagent error: %s", err)
 		}
@@ -850,8 +829,9 @@ func runSubagent(client api.Client, task, extraContext, workDir string, searchMg
 		}
 
 		msgs = append(msgs, api.Message{
-			Role:      api.RoleAssistant,
-			ToolCalls: toolCalls,
+			Role:             api.RoleAssistant,
+			ReasoningContent: reasoningContent,
+			ToolCalls:        toolCalls,
 		})
 
 		for _, tc := range toolCalls {

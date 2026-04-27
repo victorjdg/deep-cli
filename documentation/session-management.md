@@ -20,10 +20,10 @@ type Session struct {
 
 ```go
 // With automatic context size detection from model name
-sess := session.NewWithContext("deepseek-chat", 0)
+sess := session.NewWithContext("deepseek-v4-pro", 0)
 
 // With explicit context size
-sess := session.NewWithContext("deepseek-chat", 65536)
+sess := session.NewWithContext("deepseek-v4-pro", 65536)
 ```
 
 On creation, the first message in `Messages` is always the system prompt for the given model.
@@ -32,11 +32,11 @@ On creation, the first message in `Messages` is always the system prompt for the
 
 Each model has a tailored system prompt:
 
-| Model               | Prompt focus                                                 |
-|---------------------|--------------------------------------------------------------|
-| `deepseek-chat`     | Expert programming assistant, concise, accurate              |
-| `deepseek-reasoner` | Expert programming assistant with deep reasoning capabilities |
-| Any other model     | Generic expert programming assistant                         |
+| Model                | Prompt focus                                    |
+|----------------------|-------------------------------------------------|
+| `deepseek-v4-pro`    | Expert programming assistant, concise, accurate |
+| `deepseek-v4-flash`  | Expert programming assistant, concise, accurate |
+| Any other model      | Generic expert programming assistant            |
 
 ## Adding Messages
 

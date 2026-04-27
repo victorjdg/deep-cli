@@ -11,9 +11,8 @@ type statusBarModel struct {
 	tokens      int
 	contextPct  float64
 	width       int
-	hint        string // completion hint
-	enhance     bool   // prompt enhancement active
-	agent       bool   // agent mode active
+	hint       string // completion hint
+	agent      bool   // agent mode active
 	autoAccept  bool   // auto-accept edits/commands active
 }
 
@@ -44,10 +43,6 @@ func (m *statusBarModel) SetContextPct(pct float64) {
 	m.contextPct = pct
 }
 
-func (m *statusBarModel) SetEnhance(active bool) {
-	m.enhance = active
-}
-
 func (m *statusBarModel) SetAgent(active bool) {
 	m.agent = active
 }
@@ -75,9 +70,6 @@ func (m statusBarModel) View() string {
 
 	// ── Line 1: model, tokens, active flags, context % ──
 	left := fmt.Sprintf(" %s │ T:%d", m.model, m.tokens)
-	if m.enhance {
-		left += lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render(" │ ENHANCE")
-	}
 	if m.agent {
 		left += lipgloss.NewStyle().Foreground(lipgloss.Color("34")).Render(" │ AGENT")
 	}
@@ -116,11 +108,9 @@ func (m statusBarModel) View() string {
 		return hintStyle.Render(" "+label+": ") + stateStyled + hintStyle.Render(" ("+shortcut+")")
 	}
 
-	line2 := renderHint("Agent", onOff(m.agent), "Ctrl+A") +
+	line2 := renderHint("Agent", onOff(m.agent), "Ctrl+G") +
 		hintStyle.Render("   ") +
 		renderHint("Auto-accept", onOff(m.autoAccept), "/auto or Ctrl+A") +
-		hintStyle.Render("   ") +
-		renderHint("Enhance", onOff(m.enhance), "Ctrl+E") +
 		hintStyle.Render("   Trace: Ctrl+T")
 
 	line2 = statusBarStyle.Width(m.width).Render(line2)

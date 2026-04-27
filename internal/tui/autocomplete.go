@@ -15,7 +15,6 @@ var slashCommands = []commandInfo{
 	{name: "/clear", desc: "Clear conversation history"},
 	{name: "/compact", desc: "Compact conversation context"},
 	{name: "/cost", desc: "Show token usage"},
-	{name: "/enhance", desc: "Toggle prompt enhancement"},
 	{name: "/exit", desc: "Exit the application"},
 	{name: "/file", desc: "Load file(s) into context"},
 	{name: "/help", desc: "Show available commands"},
