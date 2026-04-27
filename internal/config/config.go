@@ -18,8 +18,8 @@ type Config struct {
 }
 
 var defaultContextSizes = map[string]int{
-	"deepseek-chat":     128000,
-	"deepseek-reasoner": 128000,
+	"deepseek-v4-pro":   1000000,
+	"deepseek-v4-flash": 1000000,
 }
 
 const fallbackContextSize = 8192
@@ -64,7 +64,7 @@ func Load() (*Config, error) {
 		model = os.Getenv("DEEPSEEK_MODEL")
 	}
 	if model == "" {
-		model = "deepseek-chat"
+		model = "deepseek-v4-pro"
 	}
 
 	// Resolve max context tokens: flag > env > model lookup > fallback.

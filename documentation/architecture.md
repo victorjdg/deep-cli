@@ -58,7 +58,6 @@ Long-running operations (API calls, agent loops, streaming) run in goroutines re
 | Stream response  | `startStream()`          | `streamChunkMsg`, `streamDoneMsg`, `streamErrMsg` |
 | Agent loop       | `runAgentLoop()`         | `agentToolUseMsg`, `agentSpinnerMsg`, `agentTraceMsg`, `agentConfirmMsg`, `agentWarnMsg`, `agentDoneMsg`, `agentErrMsg` |
 | Compact context  | `compactConversation()`  | `compactDoneMsg`                                  |
-| Enhance prompt   | `enhancePrompt()`        | `enhanceDoneMsg`                                  |
 | Fetch models     | `fetchModels()`          | `modelsListMsg`                                   |
 | Check connection | `checkConnection()`      | `connectionCheckMsg`                              |
 | Init project     | `initProject()`          | `initDoneMsg`                                     |
@@ -130,8 +129,8 @@ Each sub-component is a struct with its own `Update(msg) (Self, tea.Cmd)` and `V
 The status bar is two lines tall (`statusHeight = 2` in `resize()`):
 
 ```
- deepseek-chat │ T:1234 │ AGENT │ Ctx:9%          /help
- Agent: ON (Ctrl+A)   Auto-accept: OFF (/auto or Ctrl+A)   Enhance: OFF (Ctrl+E)
+ deepseek-v4-pro │ T:1234 │ AGENT │ Ctx:9%          /help
+ Agent: ON (Ctrl+G)   Auto-accept: OFF (/auto or Ctrl+A)
 ```
 
-Line 1 shows active mode flags and context usage. Line 2 shows static key hints with current ON/OFF state for the three toggleable modes.
+Line 1 shows active mode flags and context usage. Line 2 shows static key hints with current ON/OFF state for the two toggleable modes.

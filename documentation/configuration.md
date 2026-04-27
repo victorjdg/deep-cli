@@ -27,7 +27,7 @@ Configuration is resolved in this priority order (highest wins):
 | Variable                | Description                                      | Default                          |
 |-------------------------|--------------------------------------------------|----------------------------------|
 | `DEEPSEEK_API_KEY`      | API key for DeepSeek (required)                  | —                                |
-| `DEEPSEEK_MODEL`        | Model name                                       | `deepseek-chat`                  |
+| `DEEPSEEK_MODEL`        | Model name                                       | `deepseek-v4-pro`                |
 | `DEEPSEEK_MAX_CONTEXT`  | Token limit for context window                   | Auto-detected from model         |
 | `DEEPSEEK_MAX_SUBAGENTS`| Max parallel subagents for `delegate_task`       | `5`                              |
 
@@ -43,11 +43,11 @@ Configuration is resolved in this priority order (highest wins):
 
 If `DEEPSEEK_MAX_CONTEXT` is not set, the context size is inferred from the model name using prefix matching:
 
-| Model prefix         | Context tokens |
-|----------------------|----------------|
-| `deepseek-chat`      | 128,000        |
-| `deepseek-reasoner`  | 128,000        |
-| Any other            | 8,192          |
+| Model prefix          | Context tokens |
+|-----------------------|----------------|
+| `deepseek-v4-pro`     | 1,000,000      |
+| `deepseek-v4-flash`   | 1,000,000      |
+| Any other             | 8,192          |
 
 ## .env File
 
@@ -55,6 +55,6 @@ The app automatically loads a `.env` file from the current working directory at 
 
 ```env
 DEEPSEEK_API_KEY=your-api-key-here
-# DEEPSEEK_MODEL=deepseek-chat
+# DEEPSEEK_MODEL=deepseek-v4-pro
 # DEEPSEEK_MAX_SUBAGENTS=5
 ```

@@ -9,7 +9,6 @@ A terminal AI assistant powered by [DeepSeek](https://deepseek.com), written in 
 - **Interactive TUI** with streaming responses and markdown rendering
 - **Agent mode** — the model can read, write, and search files, run shell commands, and search the web; multiple tool calls execute in parallel automatically, and complex tasks can be delegated to parallel subagents
 - **Slash commands** for managing context, models, and settings
-- **Prompt enhancement** — automatically rewrites your prompt before sending
 - **Context compression** — summarize long conversations to free up token space
 - **Auto-accept mode** — approve all agent edits and commands automatically, or review each one individually
 - **Project init** — generate a `CONTEXT.md` file documenting your project with `/init`
@@ -64,7 +63,7 @@ cp .env.example .env
 | Environment Variable     | Description                                       | Default                        |
 |--------------------------|---------------------------------------------------|--------------------------------|
 | `DEEPSEEK_API_KEY`       | DeepSeek API key (required)                       | —                              |
-| `DEEPSEEK_MODEL`         | Model to use                                      | `deepseek-chat`                |
+| `DEEPSEEK_MODEL`         | Model to use                                      | `deepseek-v4-pro`              |
 | `DEEPSEEK_MAX_CONTEXT`   | Max context window size in tokens                 | Auto-detected from model       |
 | `TAVILY_API_KEY`         | API key for Tavily web search                     | —                              |
 | `BRAVE_SEARCH_API_KEY`   | API key for Brave Search                          | —                              |
@@ -110,7 +109,6 @@ Type any command starting with `/` in the interactive REPL:
 | `/file <path> ...`    | Load one or more files into the conversation context         |
 | `/clear`              | Clear conversation history                                   |
 | `/compact`            | Summarize and compress the conversation (AI-assisted)        |
-| `/enhance`            | Toggle prompt enhancement mode                               |
 | `/agent`              | Toggle agent mode (tool calling)                             |
 | `/auto`               | Toggle auto-accept mode for file edits and commands          |
 | `/init`               | Analyze the current project and generate a `CONTEXT.md` file |
@@ -139,7 +137,7 @@ Review these /file src/api.go /file src/types.go and suggest improvements
 |---------------|---------------------------------------------|
 | `Enter`       | Submit message                              |
 | `Shift+Enter` | Insert newline (multiline input)            |
-| `Ctrl+E`      | Toggle prompt enhancement                   |
+| `Ctrl+G`      | Toggle agent mode                           |
 | `Ctrl+A`      | Toggle auto-accept mode                     |
 | `Ctrl+T`      | Toggle agent trace panel                    |
 | `Ctrl+L`      | Clear the screen                            |
@@ -153,7 +151,7 @@ Review these /file src/api.go /file src/types.go and suggest improvements
 
 ## Agent Mode
 
-The model can autonomously use tools to answer questions, explore your codebase, edit files, and run commands. Agent mode is **enabled by default** and can be toggled with `/agent`.
+The model can autonomously use tools to answer questions, explore your codebase, edit files, and run commands. Agent mode is **enabled by default** and can be toggled with `/agent` or `Ctrl+G`.
 
 ### Available tools
 
@@ -236,8 +234,8 @@ The engine selection is **not persisted** between sessions; configure your prefe
 
 | Model               | Context     | Use case                                |
 |---------------------|-------------|-----------------------------------------|
-| `deepseek-chat`     | 128K tokens | General purpose, coding, analysis       |
-| `deepseek-reasoner` | 128K tokens | Complex reasoning and problem solving   |
+| `deepseek-v4-pro`   | 1M tokens   | General purpose, coding, analysis (default) |
+| `deepseek-v4-flash` | 1M tokens   | Faster, more efficient                      |
 
 Use `/models` to list all models available in your account, or `/model <name>` to switch.
 

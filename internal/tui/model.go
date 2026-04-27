@@ -40,11 +40,8 @@ type Model struct {
 	modelPicker modelPicker
 	history     *promptHistory
 
-	enhanceActive      bool   // prompt enhancement mode
-	agentActive        bool   // tool-calling agent mode
-	autoAccept         bool   // auto-accept file edits and commands without prompting
-	pendingFileContent string // file content waiting for enhance to complete
-	pendingMessage     string // original message waiting for enhance to complete
+	agentActive bool // tool-calling agent mode
+	autoAccept  bool // auto-accept file edits and commands without prompting
 
 	agentChan      <-chan agentEvent // channel for agent loop progress
 	confirmPrompt  confirmPrompt
@@ -194,31 +191,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner.Stop()
 		m.input.Focus()
 		return m, nil
-
-	case enhanceDoneMsg:
-		m.spinner.Stop()
-		userMsg := msg.enhanced
-		if msg.err != nil || userMsg == "" {
-			m.viewport.AddSlashOutput("Enhance failed, using original prompt.")
-			userMsg = m.pendingMessage
-		}
-		var prompt string
-		if m.pendingFileContent != "" {
-			prompt = m.pendingFileContent + "\n\n" + userMsg
-		} else {
-			prompt = userMsg
-		}
-		m.pendingFileContent = ""
-		m.pendingMessage = ""
-		m.session.AddUser(prompt)
-		m.session.AddTokens(msg.usage)
-		m.statusBar.SetTokens(m.session.Tokens.TotalTokens)
-		m.statusBar.SetContextPct(m.session.ContextPercentage())
-
-		ctx, cancel := context.WithCancel(context.Background())
-		m.streamCancel = cancel
-		spinnerCmd := m.spinner.Start("Thinking...")
-		return m, tea.Batch(spinnerCmd, startStream(m.client, m.session.Messages, ctx))
 
 	case agentToolUseMsg:
 		label := fmt.Sprintf("  tool: %s(%s)", msg.name, msg.args)
@@ -415,13 +387,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 
-	case key == "ctrl+e":
-		m.enhanceActive = !m.enhanceActive
-		m.statusBar.SetEnhance(m.enhanceActive)
-		if m.enhanceActive {
-			m.viewport.AddSlashOutput("Prompt enhancement ON. Prompts will be improved before sending (uses extra tokens).")
+	case key == "ctrl+g":
+		m.agentActive = !m.agentActive
+		m.statusBar.SetAgent(m.agentActive)
+		if m.agentActive {
+			m.viewport.AddSlashOutput("Agent mode ON. The model can now read files, list directories, write files, and search the web (uses extra tokens).")
 		} else {
-			m.viewport.AddSlashOutput("Prompt enhancement OFF.")
+			m.viewport.AddSlashOutput("Agent mode OFF.")
 		}
 		return m, nil
 
@@ -604,8 +576,7 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 			MaxContextTokens: m.session.MaxContextTokens,
 			LastPromptTokens: m.session.LastPromptTokens,
 			MessageCount:     len(m.session.Messages),
-			EnhanceActive:    m.enhanceActive,
-		})
+			})
 
 		if result.quit {
 			return m, tea.Quit
@@ -655,17 +626,6 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 				m.viewport.AddSlashOutput("Agent mode ON. The model can now read files, list directories, write files, and search the web (uses extra tokens).")
 			} else {
 				m.viewport.AddSlashOutput("Agent mode OFF.")
-			}
-			return m, nil
-		}
-
-		if result.toggleEnhance {
-			m.enhanceActive = !m.enhanceActive
-			m.statusBar.SetEnhance(m.enhanceActive)
-			if m.enhanceActive {
-				m.viewport.AddSlashOutput("Prompt enhancement ON. Prompts will be improved before sending (uses extra tokens).")
-			} else {
-				m.viewport.AddSlashOutput("Prompt enhancement OFF.")
 			}
 			return m, nil
 		}
@@ -754,15 +714,6 @@ func (m Model) handleSubmit() (tea.Model, tea.Cmd) {
 		m.agentChan = ch
 		spinnerCmd := m.spinner.Start("Agent thinking...")
 		return m, tea.Batch(spinnerCmd, cmd, listenForAgentEvent(ch))
-	}
-
-	// If enhance is active, improve the prompt first.
-	if m.enhanceActive {
-		m.pendingFileContent = fileContent
-		m.pendingMessage = message
-		spinnerCmd := m.spinner.Start("Enhancing prompt...")
-		cmd := enhancePrompt(m.client, message)
-		return m, tea.Batch(spinnerCmd, cmd)
 	}
 
 	m.session.AddUser(prompt)

@@ -49,14 +49,6 @@ Requires at least one exchange (user + assistant message) to be active. Token us
 
 ---
 
-### `/enhance`
-
-Toggles **prompt enhancement mode**. When active, your message is rewritten by the LLM to be clearer and more detailed before being sent. The improvement is transparent — you see only the original message in the viewport, not the rewritten one.
-
-Also available as `Ctrl+E`. Status bar shows `ENHANCE` in yellow when active.
-
----
-
 ### `/agent`
 
 Toggles **agent mode** (tool calling). When active, the model can use all available tools to autonomously complete tasks.
@@ -159,7 +151,7 @@ Shows the current model, or switches to a different one:
 
 ```
 /model               → Print current model name
-/model deepseek-chat → Switch to deepseek-chat
+/model deepseek-v4-flash → Switch to deepseek-v4-flash
 ```
 
 Switching model creates a new API client instance.
